@@ -179,13 +179,11 @@ class BookViewModel(private val repository: BookRepository) : ViewModel() {
                 
                 if (ext == "fb2") {
                     success = com.example.util.BookConverter.convertFb2ToEpub(context, inputStream, tempEpubFile)
-                } else if (ext == "pdf") {
-                    success = com.example.util.BookConverter.convertPdfToEpub(context, inputStream, tempEpubFile)
                 }
                 inputStream.close()
 
                 if (success && tempEpubFile.exists()) {
-                    val convertedName = fileName.replace(Regex("\\.(fb2|pdf)$", RegexOption.IGNORE_CASE), "") + " (Converted).epub"
+                    val convertedName = fileName.replace(Regex("\\.fb2$", RegexOption.IGNORE_CASE), "") + " (Converted).epub"
                     val fileLength = tempEpubFile.length()
                     val convertedUri = Uri.fromFile(tempEpubFile)
                     

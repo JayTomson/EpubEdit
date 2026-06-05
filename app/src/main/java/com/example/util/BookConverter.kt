@@ -9,15 +9,35 @@ import org.w3c.dom.Element
 import java.io.*
 import java.nio.charset.Charset
 import java.util.UUID
-import java.util.regex.Pattern
 import java.util.zip.CRC32
-import java.util.zip.InflaterInputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import javax.xml.parsers.DocumentBuilderFactory
 
 object BookConverter {
     private const val TAG = "BookConverter"
+
+    /**
+     * Ensures an image ID has a standard image file extension (.jpg, .png, etc.).
+     * FB2 image IDs often lack extensions, which prevents standard EPUB parsing.
+     */
+    fun ensureImageExtension(id: String, bytes: ByteArray? = null): String {
+        val lower = id.lowercase()
+        if (lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png") || lower.endsWith(".webp") || lower.endsWith(".gif")) {
+            return id
+        }
+        if (bytes != null && bytes.size > 4) {
+            // Match PNG magic bytes
+            if (bytes[0] == 0x89.toByte() && bytes[1] == 0x50.toByte() && bytes[2] == 0x4E.toByte() && bytes[3] == 0x47.toByte()) {
+                return "$id.png"
+            }
+            // Match GIF magic bytes
+            if (bytes[0] == 0x47.toByte() && bytes[1] == 0x49.toByte() && bytes[2] == 0x46.toByte()) {
+                return "$id.gif"
+            }
+        }
+        return "$id.jpg"
+    }
 
     /**
      * Converts an FB2 book from input stream to a valid EPUB file.
@@ -56,7 +76,7 @@ object BookConverter {
             }
 
             // 2. Extract Binaries (images)
-            val extractedImages = mutableMapOf<String, ByteArray>() // id -> bytes
+            val extractedImagesRaw = mutableMapOf<String, ByteArray>() // id -> bytes
             val binaryNodes = doc.getElementsByTagNameNS("*", "binary")
             for (i in 0 until binaryNodes.length) {
                 val binaryNode = binaryNodes.item(i) as Element
@@ -65,11 +85,18 @@ object BookConverter {
                     val base64Text = binaryNode.textContent.replace(Regex("\\s+"), "")
                     try {
                         val bytes = Base64.decode(base64Text, Base64.DEFAULT)
-                        extractedImages[id] = bytes
+                        extractedImagesRaw[id] = bytes
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed decoding base64 image $id", e)
                     }
                 }
+            }
+
+            // Map image names to guaranteed extensions
+            val extractedImages = mutableMapOf<String, ByteArray>()
+            extractedImagesRaw.forEach { (id, bytes) ->
+                val extId = ensureImageExtension(id, bytes)
+                extractedImages[extId] = bytes
             }
 
             // 3. Find cover image
@@ -79,11 +106,22 @@ object BookConverter {
                 val imgNodes = (coverpageNodes.item(0) as Element).getElementsByTagNameNS("*", "image")
                 if (imgNodes.length > 0) {
                     val imgEl = imgNodes.item(0) as Element
-                    coverImageId = getAttributeCoalesce(imgEl, "href", "l:href", "xlink:href")?.removePrefix("#")
+                    val rawTarget = getAttributeCoalesce(imgEl, "href", "l:href", "xlink:href")?.removePrefix("#")
+                    if (rawTarget != null) {
+                        val bytes = extractedImagesRaw[rawTarget]
+                        if (bytes != null) {
+                            coverImageId = ensureImageExtension(rawTarget, bytes)
+                        }
+                    }
                 }
             }
+            if (coverImageId == null && extractedImages.isNotEmpty()) {
+                val foundCoverKey = extractedImages.keys.firstOrNull { it.lowercase().contains("cover") }
+                    ?: extractedImages.keys.first()
+                coverImageId = foundCoverKey
+            }
 
-            // 4. Parse Sections (Chapters)
+            // 4. Parse Sections recursively (Chapters)
             val chapters = mutableListOf<ParsedChapter>()
             val bodyNodes = doc.getElementsByTagNameNS("*", "body")
             
@@ -117,27 +155,10 @@ object BookConverter {
                             }
                         }
 
-                        // Extract content paragraphs & images
-                        val htmlContent = StringBuilder()
-                        val childNodes = section.childNodes
-                        for (c in 0 until childNodes.length) {
-                            val child = childNodes.item(c)
-                            if (child is Element) {
-                                when (child.localName ?: child.nodeName) {
-                                    "p" -> htmlContent.append("<p>${child.textContent}</p>\n")
-                                    "empty-line" -> htmlContent.append("<br/>\n")
-                                    "image" -> {
-                                        val href = getAttributeCoalesce(child, "href", "l:href", "xlink:href")?.removePrefix("#")
-                                        if (href != null && extractedImages.containsKey(href)) {
-                                            htmlContent.append("<div style=\"text-align:center;\"><img src=\"$href\" style=\"max-width:100%;\" /></div>\n")
-                                        }
-                                    }
-                                    "subtitle" -> htmlContent.append("<h3>${child.textContent}</h3>\n")
-                                }
-                            }
-                        }
+                        // Extract content recursively
+                        val htmlContent = renderNodeToHtml(section, extractedImagesRaw)
 
-                        val cleanContent = htmlContent.toString()
+                        val cleanContent = htmlContent.trim()
                         if (cleanContent.isNotBlank()) {
                             chapters.add(
                                 ParsedChapter(
@@ -166,248 +187,84 @@ object BookConverter {
     }
 
     /**
-     * Converts a PDF book to EPUB by scanning compressed content streams and extracting plain text.
+     * Recursively renders a section's XML nodes into responsive, clean XHTML tags.
      */
-    fun convertPdfToEpub(context: Context, pdfStream: InputStream, outputFile: File): Boolean {
-        try {
-            val pdfBytes = pdfStream.readBytes()
-            if (pdfBytes.size < 10) return false
-
-            val textPages = mutableListOf<String>()
-            
-            // Reconstruct plain texts using FlateDecode streams scan
-            val streamPattern = Pattern.compile("stream\\r?\\n", Pattern.CASE_INSENSITIVE)
-            val textMatcher = streamPattern.matcher(PdfByteSequence(pdfBytes))
-            
-            var matchIdx = 0
-            val objBodies = mutableListOf<ByteArray>()
-
-            while (textMatcher.find(matchIdx)) {
-                val streamStart = textMatcher.end()
-                
-                // Find endstream
-                val endstreamIdx = findSubarrayIndex(pdfBytes, "endstream".toByteArray(), streamStart)
-                if (endstreamIdx != -1) {
-                    val streamLen = endstreamIdx - streamStart
-                    if (streamLen > 0) {
-                        // Extract content preceding stream, which contains details like /Filter
-                        val dictStart = findBeforeIndex(pdfBytes, "<<".toByteArray(), streamStart - 6)
-                        var isFlate = false
-                        if (dictStart != -1) {
-                            val dictBytes = pdfBytes.copyOfRange(dictStart, streamStart)
-                            val dictStr = String(dictBytes, Charsets.ISO_8859_1)
-                            if (dictStr.contains("/FlateDecode", ignoreCase = true)) {
-                                isFlate = true
+    private fun renderNodeToHtml(node: org.w3c.dom.Node, extractedImagesRaw: Map<String, ByteArray>): String {
+        val sb = java.lang.StringBuilder()
+        val children = node.childNodes
+        for (i in 0 until children.length) {
+            val child = children.item(i)
+            if (child.nodeType == org.w3c.dom.Node.TEXT_NODE) {
+                sb.append(child.textContent)
+            } else if (child is Element) {
+                val name = (child.localName ?: child.nodeName).lowercase()
+                when (name) {
+                    "title" -> {
+                        // Skip rendering title element internally as we already extract it for the chapter header
+                    }
+                    "p" -> {
+                        sb.append("<p>").append(renderNodeToHtml(child, extractedImagesRaw)).append("</p>\n")
+                    }
+                    "emphasis" -> {
+                        sb.append("<i>").append(renderNodeToHtml(child, extractedImagesRaw)).append("</i>")
+                    }
+                    "strong" -> {
+                        sb.append("<b>").append(renderNodeToHtml(child, extractedImagesRaw)).append("</b>")
+                    }
+                    "image" -> {
+                        val href = getAttributeCoalesce(child, "href", "l:href", "xlink:href")?.removePrefix("#")
+                        if (href != null) {
+                            val rawBytes = extractedImagesRaw[href]
+                            if (rawBytes != null) {
+                                val finalHref = ensureImageExtension(href, rawBytes)
+                                sb.append("<div style=\"text-align:center; margin: 12px 0;\"><img src=\"$finalHref\" style=\"max-width:100%;\" /></div>\n")
                             }
                         }
-
-                        val compressedBytes = pdfBytes.copyOfRange(streamStart, endstreamIdx)
-                        try {
-                            val decompressed = if (isFlate) {
-                                decompressFlate(compressedBytes)
-                            } else {
-                                compressedBytes
-                            }
-                            if (decompressed != null && decompressed.isNotEmpty()) {
-                                objBodies.add(decompressed)
-                            }
-                        } catch (e: Exception) {
-                            // Skip broken streams
-                        }
                     }
-                    matchIdx = endstreamIdx + 9
-                } else {
-                    matchIdx = streamStart
-                }
-            }
-
-            // Extract plain texts from BT ... ET streams in our decompressed bodies
-            val pageTextBuilder = StringBuilder()
-            var textFoundCount = 0
-
-            for (body in objBodies) {
-                val bodyStr = String(body, Charsets.ISO_8859_1)
-                
-                // Match BT ... ET blocks
-                val btPattern = Pattern.compile("BT\\s+(.+?)\\s+ET", Pattern.DOTALL)
-                val m = btPattern.matcher(bodyStr)
-                val contentStreamBuilder = StringBuilder()
-
-                while (m.find()) {
-                    val textBlock = m.group(1)
-                    // Match text operators: parenthesis strings (TEXT) Tj or (TEXT)TJ etc
-                    val parenPattern = Pattern.compile("\\(([^)]*)\\)")
-                    val pm = parenPattern.matcher(textBlock)
-                    while (pm.find()) {
-                        val rawStr = pm.group(1)
-                        val decodedStr = decodePdfString(rawStr)
-                        if (decodedStr.isNotBlank()) {
-                            contentStreamBuilder.append(decodedStr)
-                        }
+                    "empty-line" -> {
+                        sb.append("<br/>\n")
                     }
-                    contentStreamBuilder.append(" ")
-                }
-
-                val resultingText = contentStreamBuilder.toString().trim()
-                if (resultingText.length > 40) {
-                    // Accumulate text or split by page
-                    // clean spacing symbols and double-spacing
-                    val cleanText = resultingText
-                        .replace(Regex("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F]"), "")
-                        .replace(Regex("\\s+"), " ")
-
-                    if (cleanText.isNotBlank()) {
-                        pageTextBuilder.append("<p>$cleanText</p>\n\n")
-                        textFoundCount += cleanText.length
-                        
-                        // Split into separate pages if length is sufficient to make a page
-                        if (pageTextBuilder.length > 2500) {
-                            textPages.add(pageTextBuilder.toString())
-                            pageTextBuilder.setLength(0)
-                        }
+                    "subtitle" -> {
+                        sb.append("<h3>").append(renderNodeToHtml(child, extractedImagesRaw)).append("</h3>\n")
+                    }
+                    "cite" -> {
+                        sb.append("<blockquote style=\"font-style: italic; margin: 10px 20px;\">")
+                          .append(renderNodeToHtml(child, extractedImagesRaw))
+                          .append("</blockquote>\n")
+                    }
+                    "poem" -> {
+                        sb.append("<div style=\"margin: 10px 0; font-style: italic;\">")
+                          .append(renderNodeToHtml(child, extractedImagesRaw))
+                          .append("</div>\n")
+                    }
+                    "stanza" -> {
+                        sb.append("<div style=\"margin: 5px 0;\">")
+                          .append(renderNodeToHtml(child, extractedImagesRaw))
+                          .append("</div>\n")
+                    }
+                    "v" -> {
+                        sb.append("<p style=\"margin: 2px 0; text-indent: 0;\">")
+                          .append(renderNodeToHtml(child, extractedImagesRaw))
+                          .append("</p>\n")
+                    }
+                    "epigraph" -> {
+                        sb.append("<div style=\"text-align: right; margin-left: 30%; font-style: italic; margin-bottom: 15px;\">")
+                          .append(renderNodeToHtml(child, extractedImagesRaw))
+                          .append("</div>\n")
+                    }
+                    else -> {
+                        sb.append(renderNodeToHtml(child, extractedImagesRaw))
                     }
                 }
             }
-
-            if (pageTextBuilder.isNotEmpty()) {
-                textPages.add(pageTextBuilder.toString())
-            }
-
-            // Handle scanned/empty PDF gracefully
-            if (textPages.isEmpty() || textFoundCount < 100) {
-                textPages.clear()
-                textPages.add("""
-                    <h2>Отсканированный PDF</h2>
-                    <p>Этот PDF-файл содержит сканированные страницы или защищён от копирования текста.</p>
-                    <p>Текст не может быть автоматически распознан без OCR-системы. Проект был создан для ручного наполнения.</p>
-                """.trimIndent())
-            }
-
-            // Build chapters from extracted text blocks
-            val chapters = mutableListOf<ParsedChapter>()
-            textPages.forEachIndexed { idx, body ->
-                chapters.add(
-                    ParsedChapter(
-                        title = "Страница ${idx + 1}",
-                        contentHtml = body,
-                        wordCount = countWords(body),
-                        characterCount = countCharacters(body)
-                    )
-                )
-            }
-
-            val title = "PDF Book"
-            val author = "PDF Exporter"
-            val description = "Конвертировано из PDF."
-
-            buildEpubZip(outputFile, title, author, description, null, emptyMap(), chapters)
-            return true
-        } catch (e: Exception) {
-            Log.e(TAG, "Error converting PDF to EPUB", e)
-            return false
         }
-    }
-
-    // Helper to find index of a subarray
-    private fun findSubarrayIndex(largeArray: ByteArray, subArray: ByteArray, start: Int): Int {
-        if (subArray.isEmpty()) return -1
-        for (i in start..largeArray.size - subArray.size) {
-            var found = true
-            for (j in subArray.indices) {
-                if (largeArray[i + j] != subArray[j]) {
-                    found = false
-                    break
-                }
-            }
-            if (found) return i
-        }
-        return -1
-    }
-
-    private fun findBeforeIndex(largeArray: ByteArray, subArray: ByteArray, start: Int): Int {
-        val limit = Math.max(0, start - 1500) // check last 1.5 KB
-        for (i in start downTo limit) {
-            if (i + subArray.size <= largeArray.size) {
-                var found = true
-                for (j in subArray.indices) {
-                    if (largeArray[i + j] != subArray[j]) {
-                        found = false
-                        break
-                    }
-                }
-                if (found) return i
-            }
-        }
-        return -1
-    }
-
-    private fun decompressFlate(compressed: ByteArray): ByteArray? {
-        return try {
-            val iis = InflaterInputStream(ByteArrayInputStream(compressed))
-            val bos = ByteArrayOutputStream()
-            val buf = ByteArray(2048)
-            var len: Int
-            while (iis.read(buf).also { len = it } != -1) {
-                bos.write(buf, 0, len)
-            }
-            bos.toByteArray()
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    private fun decodePdfString(raw: String): String {
-        val bytes = ByteArrayOutputStream()
-        var i = 0
-        while (i < raw.length) {
-            val c = raw[i]
-            if (c == '\\' && i + 1 < raw.length) {
-                val next = raw[i + 1]
-                if (next.isDigit() && i + 3 < raw.length && raw[i + 2].isDigit() && raw[i + 3].isDigit()) {
-                    val oct = raw.substring(i + 1, i + 4)
-                    val value = oct.toIntOrNull(8) ?: 0
-                    bytes.write(value)
-                    i += 4
-                } else {
-                    when (next) {
-                        'n' -> bytes.write('\n'.code)
-                        'r' -> bytes.write('\r'.code)
-                        't' -> bytes.write('\t'.code)
-                        'b' -> bytes.write('\b'.code)
-                        else -> bytes.write(next.code)
-                    }
-                    i += 2
-                }
-            } else {
-                bytes.write(c.code)
-                i++
-            }
-        }
-
-        val byteArray = bytes.toByteArray()
-        val utf8Str = String(byteArray, Charsets.UTF_8)
-        if (utf8Str.any { it.code in 0x0400..0x04FF }) {
-            return utf8Str
-        }
-
-        val cp1251Str = try {
-            String(byteArray, Charset.forName("windows-1251"))
-        } catch (e: Exception) {
-            null
-        }
-        if (cp1251Str != null && cp1251Str.any { it.code in 0x0400..0x04FF }) {
-            return cp1251Str
-        }
-
-        return String(byteArray, Charsets.ISO_8859_1)
+        return sb.toString()
     }
 
     private fun getAttributeCoalesce(el: Element, vararg names: String): String? {
         for (name in names) {
             val attr = el.getAttribute(name)
             if (attr.isNotEmpty()) return attr
-            
-            // Check namespace variations
             val localAttr = el.getAttributeNS("*", name)
             if (localAttr.isNotEmpty()) return localAttr
         }
@@ -451,7 +308,7 @@ object BookConverter {
         zos.write(containerXml.toByteArray(Charsets.UTF_8))
         zos.closeEntry()
 
-        // 3. Write images
+        // 3. Write images with valid file names & extensions
         var hasCover = false
         images.forEach { (id, bytes) ->
             zos.putNextEntry(ZipEntry("OEBPS/$id"))
@@ -474,7 +331,7 @@ object BookConverter {
         images.keys.forEach { id ->
             if (id != coverImageId) {
                 val ext = id.substringAfterLast(".", "jpg").lowercase()
-                val mediaType = if (ext == "png") "image/png" else "image/jpeg"
+                val mediaType = if (ext == "png") "image/png" else if (ext == "gif") "image/gif" else "image/jpeg"
                 manifestItems.append("<item id=\"img_$id\" href=\"$id\" media-type=\"$mediaType\"/>\n")
             }
         }
@@ -575,13 +432,5 @@ object BookConverter {
 
     private fun countCharacters(html: String): Int {
         return html.replace(Regex("<[^>]*>"), "").trim().length
-    }
-
-    private class PdfByteSequence(val bytes: ByteArray) : CharSequence {
-        override val length: Int get() = bytes.size
-        override fun get(index: Int): Char = bytes[index].toInt().toChar()
-        override fun subSequence(startIndex: Int, endIndex: Int): CharSequence {
-            return PdfByteSequence(bytes.copyOfRange(startIndex, endIndex))
-        }
     }
 }
