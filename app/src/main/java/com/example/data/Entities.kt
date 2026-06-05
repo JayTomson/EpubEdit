@@ -48,9 +48,18 @@ data class SourceFile(
             parentColumns = ["id"],
             childColumns = ["titleId"],
             onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = SourceFile::class,
+            parentColumns = ["id"],
+            childColumns = ["sourceFileId"],
+            onDelete = ForeignKey.CASCADE
         )
     ],
-    indices = [Index(value = ["titleId"])]
+    indices = [
+        Index(value = ["titleId"]),
+        Index(value = ["sourceFileId"])
+    ]
 )
 data class Chapter(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,

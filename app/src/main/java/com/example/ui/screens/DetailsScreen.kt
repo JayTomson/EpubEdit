@@ -423,6 +423,50 @@ fun ChaptersTabContent(
     var showAddManualDialog by remember { mutableStateOf(false) }
     var newManualChapterTitle by remember { mutableStateOf("") }
 
+    // Stable optimized callbacks for high scrolling performance (no lambda churn on scroll)
+    val onToggleSelection = remember(selectedChapters) {
+        { id: Long ->
+            if (selectedChapters.contains(id)) {
+                selectedChapters.remove(id)
+            } else {
+                selectedChapters.add(id)
+            }
+            Unit
+        }
+    }
+    val onMoveUpChecked = remember(chapters) {
+        { item: Chapter ->
+            val idx = chapters.indexOf(item)
+            if (idx > 0) {
+                val list = chapters.toMutableList()
+                list.removeAt(idx)
+                list.add(idx - 1, item)
+                viewModel.reorderChapters(list)
+            }
+        }
+    }
+    val onMoveDownChecked = remember(chapters) {
+        { item: Chapter ->
+            val idx = chapters.indexOf(item)
+            if (idx < chapters.size - 1) {
+                val list = chapters.toMutableList()
+                list.removeAt(idx)
+                list.add(idx + 1, item)
+                viewModel.reorderChapters(list)
+            }
+        }
+    }
+    val onPreviewClickChecked = remember {
+        { item: Chapter ->
+            previewChWithHtml = item
+        }
+    }
+    val onEditClickChecked = remember {
+        { id: Long ->
+            onChapterEditClick(id)
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
             // Control button row
@@ -489,43 +533,23 @@ fun ChaptersTabContent(
                         .weight(1f)
                         .fillMaxWidth()
                 ) {
-                    items(chapters, key = { it.id }) { item ->
-                        val isSelected = selectedChapters.contains(item.id)
+                    items(
+                        items = chapters,
+                        key = { it.id },
+                        contentType = { "chapter_row" }
+                    ) { item ->
+                        val isSelected = remember(selectedChapters, item.id) {
+                            selectedChapters.contains(item.id)
+                        }
                         ChapterRowItem(
                             item = item,
                             isSelectionMode = isSelectionMode,
                             isSelected = isSelected,
-                            onToggleSelection = {
-                                if (isSelected) {
-                                    selectedChapters.remove(item.id)
-                                } else {
-                                    selectedChapters.add(item.id)
-                                }
-                            },
-                            onMoveUp = {
-                                val idx = chapters.indexOf(item)
-                                if (idx > 0) {
-                                    val list = chapters.toMutableList()
-                                    list.removeAt(idx)
-                                    list.add(idx - 1, item)
-                                    viewModel.reorderChapters(list)
-                                }
-                            },
-                            onMoveDown = {
-                                val idx = chapters.indexOf(item)
-                                if (idx < chapters.size - 1) {
-                                    val list = chapters.toMutableList()
-                                    list.removeAt(idx)
-                                    list.add(idx + 1, item)
-                                    viewModel.reorderChapters(list)
-                                }
-                            },
-                            onPreviewClick = {
-                                previewChWithHtml = item
-                            },
-                            onEditClick = {
-                                onChapterEditClick(item.id)
-                            }
+                            onToggleSelection = { onToggleSelection(item.id) },
+                            onMoveUp = { onMoveUpChecked(item) },
+                            onMoveDown = { onMoveDownChecked(item) },
+                            onPreviewClick = { onPreviewClickChecked(item) },
+                            onEditClick = { onEditClickChecked(item.id) }
                         )
                     }
                 }

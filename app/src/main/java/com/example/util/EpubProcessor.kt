@@ -21,7 +21,8 @@ data class ParsedChapter(
     val title: String,
     val contentHtml: String,
     val wordCount: Int,
-    val characterCount: Int
+    val characterCount: Int,
+    val previewImagePath: String? = null
 )
 
 object EpubProcessor {
@@ -33,54 +34,22 @@ object EpubProcessor {
      */
     fun parseEpub(context: Context, uri: Uri): ParsedEpub? {
         val resolver = context.contentResolver
-        val tempDir = File(context.cacheDir, "epub_extracted_${System.currentTimeMillis()}")
+        val tempDir = File(context.cacheDir, "epub_unzipped_${System.currentTimeMillis()}")
         tempDir.mkdirs()
 
-        var title: String? = null
-        var author: String? = null
-        var description: String? = null
-        var coverImagePath: String? = null
-        val chaptersList = mutableListOf<ParsedChapter>()
-
+        // 1. Unzip the whole EPUB into a temp directory to allow multi-pass lookups
         try {
             resolver.openInputStream(uri)?.use { inputStream ->
                 val zipInputStream = ZipInputStream(inputStream)
                 var entry: ZipEntry? = zipInputStream.getNextEntry()
-
                 while (entry != null) {
-                    val name = entry.name
-                    if (!entry.isDirectory) {
-                        if (name.endsWith(".html", ignoreCase = true) || 
-                            name.endsWith(".xhtml", ignoreCase = true) || 
-                            name.endsWith(".htm", ignoreCase = true)) {
-                            
-                            // Read HTML content
-                            val bytes = zipInputStream.readBytes()
-                            val htmlContent = String(bytes, Charsets.UTF_8)
-                            
-                            // Simple extraction of title
-                            val chapterTitle = extractTitleFromHtml(htmlContent, name)
-                            
-                            val words = WordStatsHelper.countWords(htmlContent)
-                            val chars = WordStatsHelper.countCharacters(htmlContent)
-                            
-                            chaptersList.add(ParsedChapter(
-                                title = chapterTitle,
-                                contentHtml = htmlContent,
-                                wordCount = words,
-                                characterCount = chars
-                            ))
-                        } else if (name.endsWith(".jpg", ignoreCase = true) || 
-                                   name.endsWith(".jpeg", ignoreCase = true) || 
-                                   name.endsWith(".png", ignoreCase = true)) {
-                            // Extract possible cover image (first large image or containing "cover")
-                            if (coverImagePath == null || name.contains("cover", ignoreCase = true)) {
-                                val imgFile = File(tempDir, "extracted_cover_${System.currentTimeMillis()}.jpg")
-                                val output = FileOutputStream(imgFile)
-                                output.write(zipInputStream.readBytes())
-                                output.close()
-                                coverImagePath = imgFile.absolutePath
-                            }
+                    val outFile = File(tempDir, entry.name)
+                    if (entry.isDirectory) {
+                        outFile.mkdirs()
+                    } else {
+                        outFile.parentFile?.mkdirs()
+                        FileOutputStream(outFile).use { fos ->
+                            zipInputStream.copyTo(fos)
                         }
                     }
                     zipInputStream.closeEntry()
@@ -88,45 +57,155 @@ object EpubProcessor {
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing EPUB", e)
+            Log.e(TAG, "Error unzipping EPUB", e)
             return null
         }
 
-        // Clean up or keep cache
+        // 2. Scan tempDir for HTML and image assets
+        var coverImagePath: String? = null
+        val htmlFiles = mutableListOf<File>()
+        val imageFiles = mutableListOf<File>()
+
+        fun scanDir(dir: File) {
+            dir.listFiles()?.forEach { file ->
+                if (file.isDirectory) {
+                    scanDir(file)
+                } else {
+                    val ext = file.extension.lowercase()
+                    if (ext in listOf("html", "xhtml", "htm")) {
+                        htmlFiles.add(file)
+                    } else if (ext in listOf("jpg", "jpeg", "png", "webp", "gif")) {
+                        imageFiles.add(file)
+                    }
+                }
+            }
+        }
+        scanDir(tempDir)
+
+        // 3. Keep extracted images persistently in a media folder
+        val mediaDir = File(context.filesDir, "epub_media")
+        if (!mediaDir.exists()) mediaDir.mkdirs()
+
+        val imageMap = mutableMapOf<String, String>() // filename -> persistent absolute path
+        imageFiles.forEach { file ->
+            val destFile = File(mediaDir, "media_${System.currentTimeMillis()}_${file.name}")
+            try {
+                file.copyTo(destFile, overwrite = true)
+                imageMap[file.name.lowercase()] = destFile.absolutePath
+                // Also store complete key using relative path in lower case
+                val relativePath = file.relativeTo(tempDir).path.lowercase().replace('\\', '/')
+                imageMap[relativePath] = destFile.absolutePath
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to copy image ${file.name}", e)
+            }
+        }
+
+        // Find cover image (preferring files with 'cover' in name, or otherwise largest image file)
+        val coverFile = imageFiles.firstOrNull { it.nameWithoutExtension.lowercase().contains("cover") }
+            ?: imageFiles.maxByOrNull { it.length() }
+        if (coverFile != null) {
+            coverImagePath = imageMap[coverFile.name.lowercase()]
+        }
+
+        // 4. Parse chapters from HTML files
+        val chaptersList = mutableListOf<ParsedChapter>()
+        
+        // Sort html files alphabetically to preserve the logical reading order
+        htmlFiles.sortBy { it.path }
+
+        htmlFiles.forEach { file ->
+            val htmlContent = file.readText(Charsets.UTF_8)
+            val chapterTitle = extractTitleFromHtml(htmlContent, file.name)
+            
+            val words = WordStatsHelper.countWords(htmlContent)
+            val chars = WordStatsHelper.countCharacters(htmlContent)
+
+            // Look for first <img> tag inside html to associate chapter preview image
+            var chapPreviewImagePath: String? = null
+            val imgRegex = Regex("<img[^>]+src=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
+            val match = imgRegex.find(htmlContent)
+            if (match != null) {
+                val srcAttr = match.groupValues[1]
+                val imgFileName = File(srcAttr).name.lowercase()
+                chapPreviewImagePath = imageMap[imgFileName]
+            }
+
+            chaptersList.add(ParsedChapter(
+                title = chapterTitle,
+                contentHtml = htmlContent,
+                wordCount = words,
+                characterCount = chars,
+                previewImagePath = chapPreviewImagePath
+            ))
+        }
+
+        // Clean up unzipped temporary folder
+        tempDir.deleteRecursively()
+
         val defaultTitle = getFileNameFromUri(context, uri)?.removeSuffix(".epub") ?: "Parsed Title"
         
         return ParsedEpub(
-            title = title ?: defaultTitle,
-            author = author ?: "Unknown Author",
-            description = description ?: "No description available",
+            title = defaultTitle,
+            author = "Unknown Author",
+            description = "No description available",
             coverImagePath = coverImagePath,
-            chapters = chaptersList.sortedWith(compareBy { it.title })
+            chapters = chaptersList
         )
     }
 
     private fun extractTitleFromHtml(html: String, filename: String): String {
-        // Try extracting <title> content
-        val titleRegex = Regex("<title>([^<]*)</title>", RegexOption.IGNORE_CASE)
-        val titleMatch = titleRegex.find(html)
+        // Remove comments for cleaner regex
+        val cleanHtml = html.replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
+
+        // Priority 1: First header h1 to h4 matching (most specific)
+        val headerTags = listOf("h1", "h2", "h3", "h4")
+        for (tag in headerTags) {
+            val regex = Regex("<$tag[^>]*>(.*?)</$tag>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            val matches = regex.findAll(cleanHtml)
+            for (match in matches) {
+                val content = match.groupValues[1]
+                val cleaned = stripHtmlTags(content).trim()
+                if (cleaned.isNotEmpty() && cleaned.length < 100) {
+                    return cleaned
+                }
+            }
+        }
+
+        // Priority 2: Match divs/p with class containing "title" or "chapter" or "heading"
+        val containerRegex = Regex("<(?:p|div|span)[^>]+(?:class|id)=\"[^\"]*(?:title|chapter|heading)[^\"]*\"[^>]*>(.*?)</(?:p|div|span)>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+        val containerMatches = containerRegex.findAll(cleanHtml)
+        for (match in containerMatches) {
+            val content = match.groupValues[1]
+            val cleaned = stripHtmlTags(content).trim()
+            if (cleaned.isNotEmpty() && cleaned.length < 120) {
+                return cleaned
+            }
+        }
+
+        // Priority 3: Fallback to <title>
+        val titleRegex = Regex("<title[^>]*>(.*?)</title>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+        val titleMatch = titleRegex.find(cleanHtml)
         if (titleMatch != null) {
-            val matched = titleMatch.groupValues[1].trim()
-            if (matched.isNotEmpty()) return matched
+            val cleaned = stripHtmlTags(titleMatch.groupValues[1]).trim()
+            if (cleaned.isNotEmpty() && cleaned.length < 100) {
+                return cleaned
+            }
         }
 
-        // Try extracting first h1 or h2 tag
-        val h1Regex = Regex("<h[12][^>]*>([^<]*)</h[12]>", RegexOption.IGNORE_CASE)
-        val h1Match = h1Regex.find(html)
-        if (h1Match != null) {
-            val matched = h1Match.groupValues[1].trim()
-            if (matched.isNotEmpty()) return matched
-        }
-
-        // Simple fallback to pretty filename
+        // Priority 4: Hard fallback to pretty filename
         val baseName = File(filename).nameWithoutExtension
         return baseName.replace('_', ' ')
             .replace('-', ' ')
             .split(' ')
+            .filter { it.isNotEmpty() }
             .joinToString(" ") { it.replaceFirstChar { char -> if (char.isLowerCase()) char.titlecase() else it } }
+    }
+
+    private fun stripHtmlTags(html: String): String {
+        return html.replace(Regex("<[^>]*>"), "")
+            .replace(Regex("&nbsp;"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
     }
 
     private fun getFileNameFromUri(context: Context, uri: Uri): String? {

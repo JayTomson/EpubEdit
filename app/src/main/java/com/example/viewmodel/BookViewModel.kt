@@ -146,21 +146,22 @@ class BookViewModel(private val repository: BookRepository) : ViewModel() {
                     repository.updateTitle(updatedTitle)
                 }
 
-                // Append parsed chapters to Title's chapters list
-                val nextChapterIndex = repository.getChaptersForTitleOneShot(titleId).size
-                parsed.chapters.forEachIndexed { i, pc ->
-                    repository.insertChapter(
-                        Chapter(
-                            titleId = titleId,
-                            sourceFileId = sfId,
-                            title = pc.title,
-                            contentHtml = pc.contentHtml,
-                            orderIndex = nextChapterIndex + i,
-                            wordCount = pc.wordCount,
-                            characterCount = pc.characterCount
-                        )
-                    )
-                }
+                 // Append parsed chapters to Title's chapters list
+                 val nextChapterIndex = repository.getChaptersForTitleOneShot(titleId).size
+                 parsed.chapters.forEachIndexed { i, pc ->
+                     repository.insertChapter(
+                         Chapter(
+                             titleId = titleId,
+                             sourceFileId = sfId,
+                             title = pc.title,
+                             contentHtml = pc.contentHtml,
+                             orderIndex = nextChapterIndex + i,
+                             wordCount = pc.wordCount,
+                             characterCount = pc.characterCount,
+                             previewImagePath = pc.previewImagePath
+                         )
+                     )
+                 }
             } catch (e: Exception) {
                 Log.e("BookViewModel", "Failed importing epub", e)
             }
