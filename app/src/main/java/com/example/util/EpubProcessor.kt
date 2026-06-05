@@ -62,7 +62,6 @@ object EpubProcessor {
         }
 
         // 2. Scan tempDir for HTML and image assets
-        var coverImagePath: String? = null
         val htmlFiles = mutableListOf<File>()
         val imageFiles = mutableListOf<File>()
 
@@ -100,58 +99,308 @@ object EpubProcessor {
             }
         }
 
-        // Find cover image (preferring files with 'cover' in name, or otherwise largest image file)
-        val coverFile = imageFiles.firstOrNull { it.nameWithoutExtension.lowercase().contains("cover") }
-            ?: imageFiles.maxByOrNull { it.length() }
-        if (coverFile != null) {
-            coverImagePath = imageMap[coverFile.name.lowercase()]
+        // Find the OPF file path from container.xml
+        val containerFile = File(tempDir, "META-INF/container.xml")
+        var opfPath = "OEBPS/content.opf" // fallback default
+        if (containerFile.exists()) {
+            try {
+                val containerContent = containerFile.readText(Charsets.UTF_8)
+                val rootfileRegex = Regex("<rootfile[^>]+full-path=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
+                val m = rootfileRegex.find(containerContent)
+                if (m != null) {
+                    opfPath = m.groupValues[1]
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error reading container.xml", e)
+            }
+        }
+        val opfFile = File(tempDir, opfPath)
+        val opfDir = opfFile.parentFile ?: tempDir
+
+        // Extract metadata, manifest, and spine from OPF
+        var opfContent = ""
+        val manifestItems = mutableMapOf<String, ManifestItem>() // id -> ManifestItem
+        val spineItems = mutableListOf<String>() // ordered idrefs
+        var extractedTitle: String? = null
+        var extractedAuthor: String? = null
+        var extractedDesc: String? = null
+
+        if (opfFile.exists()) {
+            try {
+                opfContent = opfFile.readText(Charsets.UTF_8)
+
+                // Parse manifest items
+                val itemMatches = Regex("<item\\s+([^>]+)>", RegexOption.IGNORE_CASE).findAll(opfContent)
+                for (match in itemMatches) {
+                    val attribs = match.groupValues[1]
+                    val id = Regex("id=\"([^\"]+)\"", RegexOption.IGNORE_CASE).find(attribs)?.groupValues?.get(1)
+                        ?: Regex("id='([^']+)'", RegexOption.IGNORE_CASE).find(attribs)?.groupValues?.get(1)
+                    val href = Regex("href=\"([^\"]+)\"", RegexOption.IGNORE_CASE).find(attribs)?.groupValues?.get(1)
+                        ?: Regex("href='([^']+)'", RegexOption.IGNORE_CASE).find(attribs)?.groupValues?.get(1)
+                    val mediaType = Regex("media-type=\"([^\"]+)\"", RegexOption.IGNORE_CASE).find(attribs)?.groupValues?.get(1)
+                        ?: Regex("media-type='([^']+)'", RegexOption.IGNORE_CASE).find(attribs)?.groupValues?.get(1)
+
+                    if (id != null && href != null) {
+                        manifestItems[id] = ManifestItem(id, href, mediaType)
+                    }
+                }
+
+                // Parse spine items
+                val spineMatches = Regex("<itemref\\s+([^>]+)>", RegexOption.IGNORE_CASE).findAll(opfContent)
+                for (match in spineMatches) {
+                    val attribs = match.groupValues[1]
+                    val idref = Regex("idref=\"([^\"]+)\"", RegexOption.IGNORE_CASE).find(attribs)?.groupValues?.get(1)
+                        ?: Regex("idref='([^']+)'", RegexOption.IGNORE_CASE).find(attribs)?.groupValues?.get(1)
+                    if (idref != null) {
+                        spineItems.add(idref)
+                    }
+                }
+
+                // Extract Metadata
+                extractedTitle = Regex("<dc:title[^>]*>(.*?)</dc:title>", RegexOption.IGNORE_CASE).find(opfContent)?.groupValues?.get(1)
+                extractedAuthor = Regex("<dc:creator[^>]*>(.*?)</dc:creator>", RegexOption.IGNORE_CASE).find(opfContent)?.groupValues?.get(1)
+                extractedDesc = Regex("<dc:description[^>]*>(.*?)</dc:description>", RegexOption.IGNORE_CASE).find(opfContent)?.groupValues?.get(1)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed reading content.opf", e)
+            }
         }
 
-        // 4. Parse chapters from HTML files
-        val chaptersList = mutableListOf<ParsedChapter>()
-        
-        // Sort html files alphabetically to preserve the logical reading order
-        htmlFiles.sortBy { it.path }
-
-        htmlFiles.forEach { file ->
-            val htmlContent = file.readText(Charsets.UTF_8)
-            val chapterTitle = extractTitleFromHtml(htmlContent, file.name)
-            
-            val words = WordStatsHelper.countWords(htmlContent)
-            val chars = WordStatsHelper.countCharacters(htmlContent)
-
-            // Look for first <img> tag inside html to associate chapter preview image
-            var chapPreviewImagePath: String? = null
-            val imgRegex = Regex("<img[^>]+src=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
-            val match = imgRegex.find(htmlContent)
-            if (match != null) {
-                val srcAttr = match.groupValues[1]
-                val imgFileName = File(srcAttr).name.lowercase()
-                chapPreviewImagePath = imageMap[imgFileName]
+        // Resolving Cover Image from OPF or Fallback name matching
+        var coverImagePath: String? = null
+        if (opfContent.isNotEmpty()) {
+            try {
+                val coverMetaRegex = Regex("<meta[^>]+name=\"cover\"[^>]+content=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
+                val coverMetaMatch = coverMetaRegex.find(opfContent)
+                val coverMetaId = coverMetaMatch?.groupValues?.get(1)
+                if (coverMetaId != null) {
+                    val item = manifestItems[coverMetaId]
+                    if (item != null) {
+                        val decodedCoverHref = java.net.URLDecoder.decode(item.href, "UTF-8")
+                        val coverFile = File(opfDir, decodedCoverHref)
+                        if (coverFile.exists()) {
+                            coverImagePath = imageMap[coverFile.name.lowercase()]
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error looking up cover in OPF", e)
             }
+        }
+        if (coverImagePath == null) {
+            val coverFile = imageFiles.firstOrNull { it.nameWithoutExtension.lowercase().contains("cover") }
+                ?: imageFiles.maxByOrNull { it.length() }
+            if (coverFile != null) {
+                coverImagePath = imageMap[coverFile.name.lowercase()]
+            }
+        }
 
-            chaptersList.add(ParsedChapter(
-                title = chapterTitle,
-                contentHtml = htmlContent,
-                wordCount = words,
-                characterCount = chars,
-                previewImagePath = chapPreviewImagePath
-            ))
+        // Parse toc.ncx Table of Contents for splitting pages/chapters
+        val ncxItem = manifestItems.values.firstOrNull {
+            it.mediaType?.lowercase() == "application/x-dtbncx+xml" || it.href.lowercase().endsWith(".ncx")
+        }
+        var ncxFileResolved = if (ncxItem != null) File(opfDir, ncxItem.href) else null
+        if (ncxFileResolved == null || !ncxFileResolved.exists()) {
+            var foundNcx: File? = null
+            fun findNcx(dir: File) {
+                dir.listFiles()?.forEach { file ->
+                    if (file.isDirectory) findNcx(file)
+                    else if (file.extension.lowercase() == "ncx") foundNcx = file
+                }
+            }
+            findNcx(tempDir)
+            ncxFileResolved = foundNcx
+        }
+
+        data class NcxNavPoint(val title: String, val src: String, val fileHref: String, val anchor: String?)
+        val ncxNavPoints = mutableListOf<NcxNavPoint>()
+
+        if (ncxFileResolved != null && ncxFileResolved.exists()) {
+            try {
+                val ncxContent = ncxFileResolved.readText(Charsets.UTF_8)
+                val navPointRegex = Regex("<navPoint[^>]*>.*?</navPoint>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                val matches = navPointRegex.findAll(ncxContent)
+                for (match in matches) {
+                    val navPointXml = match.value
+                    
+                    val textMatch = Regex("<text[^>]*>(.*?)</text>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).find(navPointXml)
+                    val title = textMatch?.groupValues?.get(1)?.let { stripHtmlTags(it) }?.trim() ?: "Untitled Chapter"
+
+                    val srcMatch = Regex("<content[^>]+src=\"([^\"]+)\"", RegexOption.IGNORE_CASE).find(navPointXml)
+                        ?: Regex("<content[^>]+src='([^']+)'", RegexOption.IGNORE_CASE).find(navPointXml)
+
+                    val srcAttr = srcMatch?.groupValues?.get(1)
+                    if (srcAttr != null) {
+                        val cleanSrcAttr = srcAttr
+                            .replace("&amp;", "&")
+                            .replace("&quot;", "\"")
+                            .replace("&lt;", "<")
+                            .replace("&gt;", ">")
+
+                        val hashIdx = cleanSrcAttr.indexOf('#')
+                        val fileHref = if (hashIdx != -1) cleanSrcAttr.substring(0, hashIdx) else cleanSrcAttr
+                        val anchor = if (hashIdx != -1) cleanSrcAttr.substring(hashIdx + 1) else null
+
+                        ncxNavPoints.add(NcxNavPoint(title, cleanSrcAttr, fileHref, anchor))
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed parsing toc.ncx", e)
+            }
+        }
+
+        // 4. Parse chapters (with fallbacks)
+        val chaptersList = mutableListOf<ParsedChapter>()
+
+        if (ncxNavPoints.isNotEmpty()) {
+            // NCX splitting strategy (highly accurate for splitting single giant HTML files)
+            ncxNavPoints.forEachIndexed { idx, item ->
+                try {
+                    val decodedFileHref = java.net.URLDecoder.decode(item.fileHref, "UTF-8")
+                    val chapterFile = File(opfDir, decodedFileHref)
+                    if (chapterFile.exists()) {
+                        val fullHtml = chapterFile.readText(Charsets.UTF_8)
+
+                        val startIdx = if (item.anchor != null) {
+                            findAnchorPositionInHtml(fullHtml, item.anchor)
+                        } else {
+                            0
+                        }
+
+                        val endIdx = if (idx + 1 < ncxNavPoints.size && ncxNavPoints[idx + 1].fileHref == item.fileHref && ncxNavPoints[idx + 1].anchor != null) {
+                            findAnchorPositionInHtml(fullHtml, ncxNavPoints[idx + 1].anchor!!)
+                        } else {
+                            -1
+                        }
+
+                        val finalStartIdx = if (startIdx == -1) 0 else startIdx
+                        val finalEndIdx = if (endIdx == -1 || endIdx <= finalStartIdx) fullHtml.length else endIdx
+
+                        val htmlSegment = fullHtml.substring(finalStartIdx, finalEndIdx)
+
+                        val words = WordStatsHelper.countWords(htmlSegment)
+                        val chars = WordStatsHelper.countCharacters(htmlSegment)
+
+                        var chapPreviewImagePath: String? = null
+                        val imgRegex = Regex("<img[^>]+src=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
+                        val match = imgRegex.find(htmlSegment)
+                        if (match != null) {
+                            val srcAttr = match.groupValues[1]
+                            val imgFileName = File(srcAttr).name.lowercase()
+                            chapPreviewImagePath = imageMap[imgFileName]
+                        }
+
+                        chaptersList.add(ParsedChapter(
+                            title = item.title,
+                            contentHtml = htmlSegment,
+                            wordCount = words,
+                            characterCount = chars,
+                            previewImagePath = chapPreviewImagePath
+                        ))
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed parsing segment: ${item.title}", e)
+                }
+            }
+        }
+
+        // Fallback level 2: OPF spine ordering
+        if (chaptersList.isEmpty() && spineItems.isNotEmpty()) {
+            spineItems.forEach { idref ->
+                val manifestItem = manifestItems[idref]
+                if (manifestItem != null) {
+                    try {
+                        val decodedHref = java.net.URLDecoder.decode(manifestItem.href, "UTF-8")
+                        val chapterFile = File(opfDir, decodedHref)
+                        if (chapterFile.exists()) {
+                            val htmlContent = chapterFile.readText(Charsets.UTF_8)
+                            val chapterTitle = extractTitleFromHtml(htmlContent, chapterFile.name)
+
+                            val words = WordStatsHelper.countWords(htmlContent)
+                            val chars = WordStatsHelper.countCharacters(htmlContent)
+
+                            var chapPreviewImagePath: String? = null
+                            val imgRegex = Regex("<img[^>]+src=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
+                            val match = imgRegex.find(htmlContent)
+                            if (match != null) {
+                                val srcAttr = match.groupValues[1]
+                                val imgFileName = File(srcAttr).name.lowercase()
+                                chapPreviewImagePath = imageMap[imgFileName]
+                            }
+
+                            chaptersList.add(ParsedChapter(
+                                title = chapterTitle,
+                                contentHtml = htmlContent,
+                                wordCount = words,
+                                characterCount = chars,
+                                previewImagePath = chapPreviewImagePath
+                            ))
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed parsing spine chapter $idref", e)
+                    }
+                }
+            }
+        }
+
+        // Fallback level 3: Alphabetical sort of all files
+        if (chaptersList.isEmpty()) {
+            htmlFiles.sortBy { it.path }
+            htmlFiles.forEach { file ->
+                try {
+                    val htmlContent = file.readText(Charsets.UTF_8)
+                    val chapterTitle = extractTitleFromHtml(htmlContent, file.name)
+
+                    val words = WordStatsHelper.countWords(htmlContent)
+                    val chars = WordStatsHelper.countCharacters(htmlContent)
+
+                    var chapPreviewImagePath: String? = null
+                    val imgRegex = Regex("<img[^>]+src=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
+                    val match = imgRegex.find(htmlContent)
+                    if (match != null) {
+                        val srcAttr = match.groupValues[1]
+                        val imgFileName = File(srcAttr).name.lowercase()
+                        chapPreviewImagePath = imageMap[imgFileName]
+                    }
+
+                    chaptersList.add(ParsedChapter(
+                        title = chapterTitle,
+                        contentHtml = htmlContent,
+                        wordCount = words,
+                        characterCount = chars,
+                        previewImagePath = chapPreviewImagePath
+                    ))
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed sorting fallback on ${file.name}", e)
+                }
+            }
         }
 
         // Clean up unzipped temporary folder
         tempDir.deleteRecursively()
 
-        val defaultTitle = getFileNameFromUri(context, uri)?.removeSuffix(".epub") ?: "Parsed Title"
-        
+        val defaultTitle = extractedTitle?.let { stripHtmlTags(it) }?.trim()
+            ?: (getFileNameFromUri(context, uri)?.removeSuffix(".epub") ?: "Parsed Title")
+        val defaultAuthor = extractedAuthor?.let { stripHtmlTags(it) }?.trim() ?: "Unknown Author"
+        val defaultDesc = extractedDesc?.let { stripHtmlTags(it) }?.trim() ?: "No description available"
+
         return ParsedEpub(
             title = defaultTitle,
-            author = "Unknown Author",
-            description = "No description available",
+            author = defaultAuthor,
+            description = defaultDesc,
             coverImagePath = coverImagePath,
             chapters = chaptersList
         )
     }
+
+    private fun findAnchorPositionInHtml(html: String, anchor: String): Int {
+        if (anchor.isBlank()) return -1
+        val regex = Regex("<[^>]*(?:id|name)\\s*=\\s*['\"]" + Regex.escape(anchor) + "['\"][^>]*>", RegexOption.IGNORE_CASE)
+        val match = regex.find(html)
+        return match?.range?.first ?: -1
+    }
+
+    data class ManifestItem(val id: String, val href: String, val mediaType: String?)
+
 
     private fun extractTitleFromHtml(html: String, filename: String): String {
         // Remove comments for cleaner regex
@@ -441,4 +690,68 @@ object EpubProcessor {
             return null
         }
     }
+
+    /**
+     * Attempts to resolve an image's src attribute to its cached local file path.
+     */
+    fun resolveLocalImagePath(context: Context, src: String): String? {
+        val filename = File(src.lowercase()).name
+        val mediaDir = File(context.filesDir, "epub_media")
+        if (mediaDir.exists()) {
+            val matches = mediaDir.listFiles { _, name ->
+                name.lowercase().endsWith("_$filename") || name.lowercase() == filename
+            }
+            if (!matches.isNullOrEmpty()) {
+                return matches.first().absolutePath
+            }
+        }
+        return null
+    }
+
+    /**
+     * Parses the HTML content of a chapter into sequential Text and Image blocks.
+     */
+    fun parseContentIntoBlocks(context: Context, html: String): List<ContentBlock> {
+        val blocks = mutableListOf<ContentBlock>()
+        
+        // Match <img ...> tags structure safely
+        val imgRegex = Regex("<img[^>]+src=\"([^\"]+)\"[^>]*>", RegexOption.IGNORE_CASE)
+        var lastIdx = 0
+        val matches = imgRegex.findAll(html)
+        
+        for (match in matches) {
+            val imgStart = match.range.first
+            val imgEnd = match.range.last + 1
+            
+            if (imgStart > lastIdx) {
+                val intermediateText = html.substring(lastIdx, imgStart).trim()
+                if (intermediateText.isNotEmpty()) {
+                    blocks.add(ContentBlock.Text(intermediateText))
+                }
+            }
+            
+            val srcAttr = match.groupValues[1]
+            val resolvedPath = resolveLocalImagePath(context, srcAttr)
+            if (resolvedPath != null) {
+                blocks.add(ContentBlock.Image(resolvedPath))
+            }
+            
+            lastIdx = imgEnd
+        }
+        
+        if (lastIdx < html.length) {
+            val remainingText = html.substring(lastIdx).trim()
+            if (remainingText.isNotEmpty()) {
+                blocks.add(ContentBlock.Text(remainingText))
+            }
+        }
+        
+        return blocks
+    }
 }
+
+sealed class ContentBlock {
+    data class Text(val htmlText: String) : ContentBlock()
+    data class Image(val localPath: String) : ContentBlock()
+}
+

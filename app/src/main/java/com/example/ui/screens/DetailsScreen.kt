@@ -40,7 +40,7 @@ import coil.compose.AsyncImage
 import com.example.data.Chapter
 import com.example.data.SourceFile
 import com.example.data.Title
-import com.example.util.WordStatsHelper
+import com.example.util.*
 import com.example.viewmodel.BookViewModel
 import java.io.File
 import java.text.DecimalFormat
@@ -716,43 +716,59 @@ fun ChaptersTabContent(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Chapter content rendering with support for illustrator details
+                    val contentBlocks = remember(chapter.contentHtml) {
+                        EpubProcessor.parseContentIntoBlocks(context, chapter.contentHtml)
+                    }
+
+                    // Chapter content rendering with support for multiple inline illustrations
                     LazyColumn(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxWidth()
                             .padding(horizontal = 20.dp)
                     ) {
-                        // Illustration if exists
-                        if (!chapter.previewImagePath.isNullOrEmpty()) {
-                            item {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(200.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .padding(bottom = 16.dp)
-                                ) {
-                                    AsyncImage(
-                                        model = File(chapter.previewImagePath),
-                                        contentDescription = "Иллюстрация главы",
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
+                        items(contentBlocks) { block ->
+                            when (block) {
+                                is ContentBlock.Text -> {
+                                    val cleanText = block.htmlText
+                                        .replace(Regex("<[^>]*>"), "")
+                                        .replace("&nbsp;", " ")
+                                        .replace("&amp;", "&")
+                                        .replace("&lt;", "<")
+                                        .replace("&gt;", ">")
+                                        .replace("&quot;", "\"")
+                                        .replace("&apos;", "'")
+                                        .replace(Regex("\n+"), "\n")
+                                        .trim()
+                                    if (cleanText.isNotEmpty()) {
+                                        Text(
+                                            text = cleanText,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f),
+                                            lineHeight = 26.sp,
+                                            modifier = Modifier.padding(vertical = 6.dp)
+                                        )
+                                    }
+                                }
+                                is ContentBlock.Image -> {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .wrapContentHeight()
+                                            .padding(vertical = 12.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        AsyncImage(
+                                            model = File(block.localPath),
+                                            contentDescription = "Иллюстрация главы",
+                                            contentScale = ContentScale.FillWidth,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
                                 }
                             }
-                        }
-
-                        item {
-                            val cleanText = chapter.contentHtml
-                                .replace(Regex("<[^>]*>"), "\n\n") // simple markdown format visually
-                                .replace(Regex("\n+"), "\n\n")
-                            Text(
-                                text = cleanText.trim(),
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f),
-                                lineHeight = 26.sp
-                            )
                         }
                     }
 
