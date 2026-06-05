@@ -104,21 +104,26 @@ object EpubProcessor {
         var opfPath = "OEBPS/content.opf" // fallback default
         if (containerFile.exists()) {
             try {
-                val containerContent = containerFile.readText(Charsets.UTF_8)
-                val rootfileRegex = Regex("<rootfile[^>]+full-path=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
-                val m = rootfileRegex.find(containerContent)
-                if (m != null) {
-                    opfPath = m.groupValues[1]
+                val dbFactory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+                dbFactory.isNamespaceAware = false
+                val dBuilder = dbFactory.newDocumentBuilder()
+                val doc = dBuilder.parse(containerFile)
+                val rootfiles = doc.getElementsByTagName("rootfile")
+                if (rootfiles.length > 0) {
+                    val rootfile = rootfiles.item(0) as org.w3c.dom.Element
+                    val path = rootfile.getAttribute("full-path")
+                    if (path.isNotEmpty()) {
+                        opfPath = path
+                    }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error reading container.xml", e)
+                Log.e(TAG, "Error DOM parsing container.xml", e)
             }
         }
         val opfFile = File(tempDir, opfPath)
         val opfDir = opfFile.parentFile ?: tempDir
 
         // Extract metadata, manifest, and spine from OPF
-        var opfContent = ""
         val manifestItems = mutableMapOf<String, ManifestItem>() // id -> ManifestItem
         val spineItems = mutableListOf<String>() // ordered idrefs
         var extractedTitle: String? = null
@@ -127,48 +132,54 @@ object EpubProcessor {
 
         if (opfFile.exists()) {
             try {
-                opfContent = opfFile.readText(Charsets.UTF_8)
+                val dbFactory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+                dbFactory.isNamespaceAware = true
+                val dBuilder = dbFactory.newDocumentBuilder()
+                val doc = dBuilder.parse(opfFile)
+                doc.documentElement.normalize()
 
                 // Parse manifest items
-                val itemMatches = Regex("<item\\s+([^>]+)>", RegexOption.IGNORE_CASE).findAll(opfContent)
-                for (match in itemMatches) {
-                    val attribs = match.groupValues[1]
-                    val id = Regex("id=\"([^\"]+)\"", RegexOption.IGNORE_CASE).find(attribs)?.groupValues?.get(1)
-                        ?: Regex("id='([^']+)'", RegexOption.IGNORE_CASE).find(attribs)?.groupValues?.get(1)
-                    val href = Regex("href=\"([^\"]+)\"", RegexOption.IGNORE_CASE).find(attribs)?.groupValues?.get(1)
-                        ?: Regex("href='([^']+)'", RegexOption.IGNORE_CASE).find(attribs)?.groupValues?.get(1)
-                    val mediaType = Regex("media-type=\"([^\"]+)\"", RegexOption.IGNORE_CASE).find(attribs)?.groupValues?.get(1)
-                        ?: Regex("media-type='([^']+)'", RegexOption.IGNORE_CASE).find(attribs)?.groupValues?.get(1)
-
-                    if (id != null && href != null) {
+                val items = doc.getElementsByTagNameNS("*", "item")
+                for (i in 0 until items.length) {
+                    val item = items.item(i) as org.w3c.dom.Element
+                    val id = item.getAttribute("id")
+                    val href = item.getAttribute("href")
+                    val mediaType = item.getAttribute("media-type")
+                    if (id.isNotEmpty() && href.isNotEmpty()) {
                         manifestItems[id] = ManifestItem(id, href, mediaType)
                     }
                 }
 
                 // Parse spine items
-                val spineMatches = Regex("<itemref\\s+([^>]+)>", RegexOption.IGNORE_CASE).findAll(opfContent)
-                for (match in spineMatches) {
-                    val attribs = match.groupValues[1]
-                    val idref = Regex("idref=\"([^\"]+)\"", RegexOption.IGNORE_CASE).find(attribs)?.groupValues?.get(1)
-                        ?: Regex("idref='([^']+)'", RegexOption.IGNORE_CASE).find(attribs)?.groupValues?.get(1)
-                    if (idref != null) {
+                val itemrefs = doc.getElementsByTagNameNS("*", "itemref")
+                for (i in 0 until itemrefs.length) {
+                    val itemref = itemrefs.item(i) as org.w3c.dom.Element
+                    val idref = itemref.getAttribute("idref")
+                    if (idref.isNotEmpty()) {
                         spineItems.add(idref)
                     }
                 }
 
                 // Extract Metadata
-                extractedTitle = Regex("<dc:title[^>]*>(.*?)</dc:title>", RegexOption.IGNORE_CASE).find(opfContent)?.groupValues?.get(1)
-                extractedAuthor = Regex("<dc:creator[^>]*>(.*?)</dc:creator>", RegexOption.IGNORE_CASE).find(opfContent)?.groupValues?.get(1)
-                extractedDesc = Regex("<dc:description[^>]*>(.*?)</dc:description>", RegexOption.IGNORE_CASE).find(opfContent)?.groupValues?.get(1)
+                val titles = doc.getElementsByTagNameNS("*", "title")
+                if (titles.length > 0) extractedTitle = titles.item(0).textContent
+
+                val creators = doc.getElementsByTagNameNS("*", "creator")
+                if (creators.length > 0) extractedAuthor = creators.item(0).textContent
+
+                val descriptions = doc.getElementsByTagNameNS("*", "description")
+                if (descriptions.length > 0) extractedDesc = descriptions.item(0).textContent
+
             } catch (e: Exception) {
-                Log.e(TAG, "Failed reading content.opf", e)
+                Log.e(TAG, "Failed DOM reading content.opf", e)
             }
         }
 
         // Resolving Cover Image from OPF or Fallback name matching
         var coverImagePath: String? = null
-        if (opfContent.isNotEmpty()) {
+        if (opfFile.exists() && manifestItems.isNotEmpty()) {
             try {
+                val opfContent = opfFile.readText(Charsets.UTF_8)
                 val coverMetaRegex = Regex("<meta[^>]+name=\"cover\"[^>]+content=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
                 val coverMetaMatch = coverMetaRegex.find(opfContent)
                 val coverMetaId = coverMetaMatch?.groupValues?.get(1)
@@ -216,35 +227,54 @@ object EpubProcessor {
 
         if (ncxFileResolved != null && ncxFileResolved.exists()) {
             try {
-                val ncxContent = ncxFileResolved.readText(Charsets.UTF_8)
-                val navPointRegex = Regex("<navPoint[^>]*>.*?</navPoint>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-                val matches = navPointRegex.findAll(ncxContent)
-                for (match in matches) {
-                    val navPointXml = match.value
-                    
-                    val textMatch = Regex("<text[^>]*>(.*?)</text>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).find(navPointXml)
-                    val title = textMatch?.groupValues?.get(1)?.let { stripHtmlTags(it) }?.trim() ?: "Untitled Chapter"
+                val dbFactory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+                dbFactory.isNamespaceAware = true
+                val dBuilder = dbFactory.newDocumentBuilder()
+                val doc = dBuilder.parse(ncxFileResolved)
+                doc.documentElement.normalize()
 
-                    val srcMatch = Regex("<content[^>]+src=\"([^\"]+)\"", RegexOption.IGNORE_CASE).find(navPointXml)
-                        ?: Regex("<content[^>]+src='([^']+)'", RegexOption.IGNORE_CASE).find(navPointXml)
+                val navPoints = doc.getElementsByTagNameNS("*", "navPoint")
+                for (i in 0 until navPoints.length) {
+                    val node = navPoints.item(i)
+                    if (node is org.w3c.dom.Element) {
+                        var title = ""
+                        val navLabels = node.getElementsByTagNameNS("*", "navLabel")
+                        if (navLabels.length > 0) {
+                            val labelEl = navLabels.item(0) as org.w3c.dom.Element
+                            val texts = labelEl.getElementsByTagNameNS("*", "text")
+                            if (texts.length > 0) {
+                                title = texts.item(0).textContent ?: ""
+                            }
+                        }
+                        title = stripHtmlTags(title).trim()
+                        if (title.isBlank()) {
+                            title = "Untitled Chapter"
+                        }
 
-                    val srcAttr = srcMatch?.groupValues?.get(1)
-                    if (srcAttr != null) {
-                        val cleanSrcAttr = srcAttr
-                            .replace("&amp;", "&")
-                            .replace("&quot;", "\"")
-                            .replace("&lt;", "<")
-                            .replace("&gt;", ">")
+                        var srcAttr: String? = null
+                        val contents = node.getElementsByTagNameNS("*", "content")
+                        if (contents.length > 0) {
+                            val contentEl = contents.item(0) as org.w3c.dom.Element
+                            srcAttr = contentEl.getAttribute("src")
+                        }
 
-                        val hashIdx = cleanSrcAttr.indexOf('#')
-                        val fileHref = if (hashIdx != -1) cleanSrcAttr.substring(0, hashIdx) else cleanSrcAttr
-                        val anchor = if (hashIdx != -1) cleanSrcAttr.substring(hashIdx + 1) else null
+                        if (srcAttr != null && srcAttr.isNotEmpty()) {
+                            val cleanSrcAttr = srcAttr
+                                .replace("&amp;", "&")
+                                .replace("&quot;", "\"")
+                                .replace("&lt;", "<")
+                                .replace("&gt;", ">")
 
-                        ncxNavPoints.add(NcxNavPoint(title, cleanSrcAttr, fileHref, anchor))
+                            val hashIdx = cleanSrcAttr.indexOf('#')
+                            val fileHref = if (hashIdx != -1) cleanSrcAttr.substring(0, hashIdx) else cleanSrcAttr
+                            val anchor = if (hashIdx != -1) cleanSrcAttr.substring(hashIdx + 1) else null
+
+                            ncxNavPoints.add(NcxNavPoint(title, cleanSrcAttr, fileHref, anchor))
+                        }
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed parsing toc.ncx", e)
+                Log.e(TAG, "Failed DOM parsing toc.ncx", e)
             }
         }
 
@@ -266,26 +296,38 @@ object EpubProcessor {
                             0
                         }
 
-                        val endIdx = if (idx + 1 < ncxNavPoints.size && ncxNavPoints[idx + 1].fileHref == item.fileHref && ncxNavPoints[idx + 1].anchor != null) {
-                            findAnchorPositionInHtml(fullHtml, ncxNavPoints[idx + 1].anchor!!)
-                        } else {
-                            -1
+                        // Robust lookahead parsing: find the next anchor anywhere in the SAME file in any subsequent navPoints
+                        var endIdx = -1
+                        val finalStartIdx = if (startIdx == -1) 0 else startIdx
+
+                        for (nextIdx in (idx + 1) until ncxNavPoints.size) {
+                            val nextItem = ncxNavPoints[nextIdx]
+                            if (nextItem.fileHref == item.fileHref && nextItem.anchor != null) {
+                                val pos = findAnchorPositionInHtml(fullHtml, nextItem.anchor)
+                                if (pos != -1 && pos > finalStartIdx) {
+                                    endIdx = pos
+                                    break
+                                }
+                            }
                         }
 
-                        val finalStartIdx = if (startIdx == -1) 0 else startIdx
                         val finalEndIdx = if (endIdx == -1 || endIdx <= finalStartIdx) fullHtml.length else endIdx
-
                         val htmlSegment = fullHtml.substring(finalStartIdx, finalEndIdx)
 
                         val words = WordStatsHelper.countWords(htmlSegment)
                         val chars = WordStatsHelper.countCharacters(htmlSegment)
 
                         var chapPreviewImagePath: String? = null
-                        val imgRegex = Regex("<img[^>]+src=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
+                        val imgRegex = Regex("<img[^>]+src\\s*=\\s*['\"]([^'\"]+)['\"]", RegexOption.IGNORE_CASE)
                         val match = imgRegex.find(htmlSegment)
                         if (match != null) {
                             val srcAttr = match.groupValues[1]
-                            val imgFileName = File(srcAttr).name.lowercase()
+                            val decodedSrc = try {
+                                java.net.URLDecoder.decode(srcAttr, "UTF-8")
+                            } catch (e: Exception) {
+                                srcAttr
+                            }
+                            val imgFileName = File(decodedSrc).name.lowercase()
                             chapPreviewImagePath = imageMap[imgFileName]
                         }
 
@@ -394,9 +436,34 @@ object EpubProcessor {
 
     private fun findAnchorPositionInHtml(html: String, anchor: String): Int {
         if (anchor.isBlank()) return -1
-        val regex = Regex("<[^>]*(?:id|name)\\s*=\\s*['\"]" + Regex.escape(anchor) + "['\"][^>]*>", RegexOption.IGNORE_CASE)
-        val match = regex.find(html)
-        return match?.range?.first ?: -1
+        
+        // Try multiple variations of the anchor to be resilient to encoding differences
+        val variations = LinkedHashSet<String>()
+        variations.add(anchor)
+        try {
+            variations.add(java.net.URLDecoder.decode(anchor, "UTF-8"))
+        } catch (e: Exception) {}
+        try {
+            variations.add(java.net.URLEncoder.encode(anchor, "UTF-8"))
+        } catch (e: Exception) {}
+        
+        for (v in variations) {
+            val escaped = Regex.escape(v)
+            val regexes = listOf(
+                Regex("id\\s*=\\s*['\"]" + escaped + "['\"]", RegexOption.IGNORE_CASE),
+                Regex("name\\s*=\\s*['\"]" + escaped + "['\"]", RegexOption.IGNORE_CASE),
+                Regex("id\\s*=\\s*" + escaped + "(?:\\s|>)", RegexOption.IGNORE_CASE),
+                Regex("name\\s*=\\s*" + escaped + "(?:\\s|>)", RegexOption.IGNORE_CASE)
+            )
+            for (regex in regexes) {
+                val match = regex.find(html)
+                if (match != null) {
+                    return match.range.first
+                }
+            }
+        }
+        
+        return -1
     }
 
     data class ManifestItem(val id: String, val href: String, val mediaType: String?)
@@ -695,11 +762,17 @@ object EpubProcessor {
      * Attempts to resolve an image's src attribute to its cached local file path.
      */
     fun resolveLocalImagePath(context: Context, src: String): String? {
-        val filename = File(src.lowercase()).name
+        val decodedSrc = try {
+            java.net.URLDecoder.decode(src, "UTF-8")
+        } catch (e: Exception) {
+            src
+        }
+        val filename = File(decodedSrc.lowercase()).name
         val mediaDir = File(context.filesDir, "epub_media")
         if (mediaDir.exists()) {
             val matches = mediaDir.listFiles { _, name ->
-                name.lowercase().endsWith("_$filename") || name.lowercase() == filename
+                val lowerName = name.lowercase()
+                lowerName.endsWith("_$filename") || lowerName == filename
             }
             if (!matches.isNullOrEmpty()) {
                 return matches.first().absolutePath
@@ -714,29 +787,42 @@ object EpubProcessor {
     fun parseContentIntoBlocks(context: Context, html: String): List<ContentBlock> {
         val blocks = mutableListOf<ContentBlock>()
         
-        // Match <img ...> tags structure safely
-        val imgRegex = Regex("<img[^>]+src=\"([^\"]+)\"[^>]*>", RegexOption.IGNORE_CASE)
-        var lastIdx = 0
-        val matches = imgRegex.findAll(html)
+        // Match both HTML img tag and SVG XML image tags
+        val imgPattern = Regex("<img[^>]+src\\s*=\\s*['\"]([^'\"]+)['\"][^>]*>", RegexOption.IGNORE_CASE)
+        val svgImagePattern = Regex("<image[^>]+(?:xlink:)?href\\s*=\\s*['\"]([^'\"]+)['\"][^>]*>", RegexOption.IGNORE_CASE)
         
-        for (match in matches) {
-            val imgStart = match.range.first
-            val imgEnd = match.range.last + 1
-            
-            if (imgStart > lastIdx) {
-                val intermediateText = html.substring(lastIdx, imgStart).trim()
+        data class FoundImage(val start: Int, val end: Int, val src: String)
+        val foundImages = mutableListOf<FoundImage>()
+        
+        imgPattern.findAll(html).forEach { match ->
+            foundImages.add(FoundImage(match.range.first, match.range.last + 1, match.groupValues[1]))
+        }
+        
+        svgImagePattern.findAll(html).forEach { match ->
+            if (foundImages.none { it.start <= match.range.first && it.end >= match.range.last }) {
+                foundImages.add(FoundImage(match.range.first, match.range.last + 1, match.groupValues[1]))
+            }
+        }
+        
+        foundImages.sortBy { it.start }
+        
+        var lastIdx = 0
+        for (img in foundImages) {
+            if (img.start > lastIdx) {
+                val intermediateText = html.substring(lastIdx, img.start).trim()
                 if (intermediateText.isNotEmpty()) {
                     blocks.add(ContentBlock.Text(intermediateText))
                 }
             }
             
-            val srcAttr = match.groupValues[1]
-            val resolvedPath = resolveLocalImagePath(context, srcAttr)
+            val resolvedPath = resolveLocalImagePath(context, img.src)
             if (resolvedPath != null) {
                 blocks.add(ContentBlock.Image(resolvedPath))
+            } else {
+                Log.d("EpubProcessor", "Could not resolve image path: ${img.src}")
             }
             
-            lastIdx = imgEnd
+            lastIdx = img.end
         }
         
         if (lastIdx < html.length) {
