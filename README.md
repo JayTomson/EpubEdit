@@ -1,21 +1,67 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# EpubEdit 📚✍️
 
-# Run and deploy your AI Studio app
+**EpubEdit** — это мощное и интуитивно понятное Android-приложение для импорта, детального редактирования, визуального анализа и экспорта электронных книг в формате **EPUB**. Разработано на современном стеке технологий разработки под Android с использованием декларативного UI на **Jetpack Compose** и базы данных **Room**.
 
-This contains everything you need to run your app locally.
+---
 
-View your app in AI Studio: https://ai.studio/apps/cc45b66f-b783-4635-be88-0daaa5c0a413
+## ✨ Основные возможности
 
-## Run Locally
+- **📥 Умный импорт EPUB**: Полный автоматический разбор внутренней структуры книги (`container.xml`, `content.opf`, `toc.ncx`) с сохранением иерархии глав, метаданных (название, автор, описание) и обложки.
+- **🖼️ Мультимедиа и Иллюстрации**: Извлечение и кеширование медиа-ресурсов. Полная поддержка отображения inline-иллюстраций (включая растровые изображения и SVG-векторы внутри глав).
+- **✍️ Удобный редактор глав**:
+  - Быстрое изменение названия глав и их содержимого.
+  - Возможность ручного создания новых глав с нуля.
+  - Удаление ненужных разделов и гибкое управление структурой книги.
+- **📊 Детальная статистика**: Точный подсчет слов и символов для каждой главы и всей книги в реальном времени с помощью встроенного модуля анализа текста.
+- **💾 Локальное хранилище**: Надежное сохранение всех изменений, рабочих файлов и структуры импортированных книг локально на устройстве с помощью **SQLite & Room**.
+- **📤 Обратный экспорт в EPUB**: Быстрая сборка отредактированных текстов, структуры и иллюстраций обратно в валидный архив `.epub`, готовый для чтения в любом внешнем ридере.
+- **🎨 Современный дизайн**: Интерфейс выполнен в строгом соответствии с гайдлайнами **Material Design 3** с поддержкой тёмного режима для комфортной работы в любое время суток.
 
-**Prerequisites:**  [Android Studio](https://developer.android.com/studio)
+---
 
+## 🛠️ Технологический стек
 
-1. Open Android Studio
-2. Select **Open** and choose the directory containing this project
-3. Allow Android Studio to fix any incompatibilities as it imports the project.
-4. Create a file named `.env` in the project directory and set `GEMINI_API_KEY` in that file to your Gemini API key (see `.env.example` for an example)
-5. Remove this line from the app's `build.gradle.kts` file: `signingConfig = signingConfigs.getByName("debugConfig")`
-6. Run the app on an emulator or physical device
+* **Язык программирования**: [Kotlin](https://kotlinlang.org/) (Coroutines, Flow)
+* **Построение интерфейса**: [Jetpack Compose](https://developer.android.com/compose) (с поддержкой Material 3, Edge-to-Edge и адаптивных макетов)
+* **Архитектурный паттерн**: MVVM (Model-View-ViewModel) + Clean Architecture
+* **База данных**: [Room Database](https://developer.android.com/training/data-storage/room) — для быстрого офлайн-кеширования электронных книг
+* **Медиа и Иллюстрации**: [Coil](https://coil-kt.github.io/coil/) — для асинхронной загрузки и визуализации локальных изображений глав
+* **Парсинг документов**: Безопасный низкоуровневый разбор XML в DOM (Document Object Model) для извлечения метаданных и разметки глав
+
+---
+
+## 🚀 Начало работы
+
+### Требования
+* Android Studio (последняя стабильная версия)
+* Android SDK 26 (Android 8.0) или выше
+* Gradle 8.0+
+
+### Сборка и Запуск
+
+1. Склонируйте репозиторий:
+   ```bash
+   git clone https://github.com/your-username/epub-edit.git
+   ```
+2. Откройте проект в **Android Studio**.
+3. Дождитесь синхронизации Gradle-зависимостей.
+4. Подключите реальное Android-устройство или запустите Эмулятор.
+5. Нажмите **Run** (кнопка с зелёным треугольником) или соберите проект через терминал:
+   ```bash
+   gradle assembleDebug
+   ```
+
+---
+
+## 📂 Структура проекта
+
+* `app/src/main/java/com/example/data/` — Сущности данных, DAO Room, репозитории хранения книг и файлов.
+* `app/src/main/java/com/example/ui/` — Компоненты Jetpack Compose, экраны импорта, детального чтения и настройки.
+* `app/src/main/java/com/example/viewmodel/` — Архитектурные ViewModels для управления UI-состоянием и бизнес-логикой.
+* `app/src/main/java/com/example/util/` — Утилиты для разбора и манипулирования EPUB файлами, парсинга HTML-блоков и подсчета статистики слов.
+
+---
+
+## 📄 Лицензия
+
+Проект распространяется на условиях свободной лицензии **MIT**. См. подробности в файле [LICENSE](./LICENSE).
