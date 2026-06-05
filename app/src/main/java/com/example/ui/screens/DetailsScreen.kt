@@ -154,6 +154,7 @@ fun DetailsScreen(
                         viewModel = viewModel,
                         titleId = titleId,
                         chapters = chapters,
+                        sourceFiles = sourceFiles,
                         onChapterEditClick = onChapterEditClick
                     )
                     2 -> InfoTabContent(
@@ -413,6 +414,7 @@ fun ChaptersTabContent(
     viewModel: BookViewModel,
     titleId: Long,
     chapters: List<Chapter>,
+    sourceFiles: List<SourceFile>,
     onChapterEditClick: (Long) -> Unit
 ) {
     val context = LocalContext.current
@@ -566,22 +568,26 @@ fun ChaptersTabContent(
         ) {
             // MERGE FILE CHIP
             if (chapters.isNotEmpty() && !isSelectionMode) {
+                val hasMultipleFiles = sourceFiles.size >= 2
+                val buttonText = if (hasMultipleFiles) "Слить воедино" else "Экспорт EPUB"
+                
                 ExtendedFloatingActionButton(
                     onClick = {
                         viewModel.exportMergedEpub(context, titleId) { file ->
                             if (file != null) {
-                                Toast.makeText(
-                                    context,
-                                    "EPUB успешно слит в папку Download: ${file.name}",
-                                    Toast.LENGTH_LONG
-                                ).show()
+                                val msg = if (hasMultipleFiles) {
+                                    "EPUB успешно слит в папку Download: ${file.name}"
+                                } else {
+                                    "EPUB успешно сохранен в папку Download: ${file.name}"
+                                }
+                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                             } else {
                                 Toast.makeText(context, "Ошибка импорта / сборки EPUB", Toast.LENGTH_SHORT).show()
                             }
                         }
                     },
                     icon = { Icon(Icons.Default.Save, contentDescription = null) },
-                    text = { Text("Слить воедино") },
+                    text = { Text(buttonText) },
                     containerColor = MaterialTheme.colorScheme.secondaryContainer,
                     contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
                     modifier = Modifier.height(48.dp)

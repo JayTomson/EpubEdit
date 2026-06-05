@@ -64,22 +64,13 @@ fun EditorScreen(
     // Local mutable state fields synchronized on load
     var chapterTitle by remember(currentChapter) { mutableStateOf(currentChapter.title) }
     var contentHtml by remember(currentChapter) { mutableStateOf(currentChapter.contentHtml) }
-    var illustPath by remember(currentChapter) { mutableStateOf(currentChapter.previewImagePath) }
+    var visualText by remember(currentChapter) { mutableStateOf(htmlToPlainText(currentChapter.contentHtml)) }
 
     var isHtmlMode by remember { mutableStateOf(false) } // False: Visual format, True: HTML raw edit
     var isFocusMode by remember { mutableStateOf(false) } // Distraction-free focus writing mode
 
     // For supporting visual rich formatting helper actions (cursor placement or appends)
     var contentSelection by remember { mutableStateOf(TextFieldValue("")) }
-
-    val illustLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri ->
-        if (uri != null) {
-            val localPath = viewModel.saveCoverImageLocally(context, uri)
-            illustPath = localPath
-        }
-    }
 
     Scaffold(
         topBar = {
@@ -108,11 +99,12 @@ fun EditorScreen(
                     actions = {
                         Button(
                             onClick = {
+                                val finalHtml = if (isHtmlMode) contentHtml else plainTextToHtml(visualText)
                                 viewModel.updateChapterContent(
                                     chapterId = chapterId,
                                     title = chapterTitle.trim(),
-                                    contentHtml = contentHtml,
-                                    previewImagePath = illustPath
+                                    contentHtml = finalHtml,
+                                    previewImagePath = currentChapter.previewImagePath
                                 )
                                 Toast.makeText(context, "Глава сохранена!", Toast.LENGTH_SHORT).show()
                             },
@@ -143,6 +135,15 @@ fun EditorScreen(
                 elevation = CardDefaults.cardElevation(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
+                val activeText = if (isHtmlMode) contentHtml else visualText
+                val updateActiveText = { newText: String ->
+                    if (isHtmlMode) {
+                        contentHtml = newText
+                    } else {
+                        visualText = newText
+                    }
+                }
+
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -156,7 +157,7 @@ fun EditorScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         IconButton(
-                            onClick = { contentHtml = insertHtmlTag(contentHtml, "<b>", "</b>") },
+                            onClick = { updateActiveText(insertHtmlTag(activeText, "<b>", "</b>")) },
                             colors = IconButtonDefaults.iconButtonColors(
                                 contentColor = MaterialTheme.colorScheme.primary
                             )
@@ -165,7 +166,7 @@ fun EditorScreen(
                         }
 
                         IconButton(
-                            onClick = { contentHtml = insertHtmlTag(contentHtml, "<i>", "</i>") },
+                            onClick = { updateActiveText(insertHtmlTag(activeText, "<i>", "</i>")) },
                             colors = IconButtonDefaults.iconButtonColors(
                                 contentColor = MaterialTheme.colorScheme.primary
                             )
@@ -174,7 +175,7 @@ fun EditorScreen(
                         }
 
                         IconButton(
-                            onClick = { contentHtml = insertHtmlTag(contentHtml, "<u>", "</u>") },
+                            onClick = { updateActiveText(insertHtmlTag(activeText, "<u>", "</u>")) },
                             colors = IconButtonDefaults.iconButtonColors(
                                 contentColor = MaterialTheme.colorScheme.primary
                             )
@@ -183,7 +184,7 @@ fun EditorScreen(
                         }
 
                         IconButton(
-                            onClick = { contentHtml = insertHtmlTag(contentHtml, "<p>", "</p>") },
+                            onClick = { updateActiveText(insertHtmlTag(activeText, "<p>", "</p>")) },
                             colors = IconButtonDefaults.iconButtonColors(
                                 contentColor = MaterialTheme.colorScheme.primary
                             )
@@ -199,7 +200,16 @@ fun EditorScreen(
                     ) {
                         // Switch between Visual format view or Code raw tag view
                         IconButton(
-                            onClick = { isHtmlMode = !isHtmlMode },
+                            onClick = {
+                                if (isHtmlMode) {
+                                    // Turning off HTML Mode: parse contentHtml into visualText
+                                    visualText = htmlToPlainText(contentHtml)
+                                } else {
+                                    // Turning on HTML Mode: convert visualText into contentHtml
+                                    contentHtml = plainTextToHtml(visualText)
+                                }
+                                isHtmlMode = !isHtmlMode
+                            },
                             colors = IconButtonDefaults.iconButtonColors(
                                 containerColor = if (isHtmlMode) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
                                 contentColor = if (isHtmlMode) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary
@@ -258,83 +268,6 @@ fun EditorScreen(
                     )
                 }
 
-                // Illustration Image Insertion dashed card
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        text = "ИЛЛЮСТРАЦИЯ ГЛАВЫ",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.secondary,
-                        modifier = Modifier.padding(start = 4.dp)
-                    )
-
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(180.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .clickable { illustLauncher.launch("image/*") },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (!illustPath.isNullOrEmpty()) {
-                            Box(modifier = Modifier.fillMaxSize()) {
-                                AsyncImage(
-                                    model = File(illustPath!!),
-                                    contentDescription = "Превышение иллюстраций",
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .background(Color.Black.copy(alpha = 0.4f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        modifier = Modifier
-                                            .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
-                                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                                    ) {
-                                        Icon(imageVector = Icons.Default.Edit, contentDescription = null, tint = Color.White)
-                                        Text("Заменить иллюстрацию", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                    }
-                                }
-                            }
-                        } else {
-                            // Empty dashed insert illustration UI
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center,
-                                modifier = Modifier.padding(16.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.ImageSearch,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.outline,
-                                    modifier = Modifier.size(44.dp)
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = "Добавить иллюстрацию к главе",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = "Только графические ресурсы .PNG / .JPG",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.outline,
-                                    modifier = Modifier.padding(top = 2.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-
                 // Active Core editor block (Displays based on formats)
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
@@ -363,8 +296,8 @@ fun EditorScreen(
                     } else {
                         // Visual styled preview rendering format editor
                         OutlinedTextField(
-                            value = contentHtml,
-                            onValueChange = { contentHtml = it },
+                            value = visualText,
+                            onValueChange = { visualText = it },
                             placeholder = { Text("Введите содержание главы в свободном стиле...") },
                             textStyle = TextStyle(
                                 fontSize = 16.sp,
@@ -393,6 +326,7 @@ fun EditorScreen(
                     shape = RoundedCornerShape(20.dp),
                     elevation = CardDefaults.cardElevation(4.dp)
                 ) {
+                    val statsText = if (isHtmlMode) contentHtml else visualText
                     Row(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -406,7 +340,7 @@ fun EditorScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = formatStatsNumber(WordStatsHelper.countWords(contentHtml)),
+                                text = formatStatsNumber(WordStatsHelper.countWords(statsText)),
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.primary
@@ -426,7 +360,7 @@ fun EditorScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = formatStatsNumber(WordStatsHelper.countCharacters(contentHtml)),
+                                text = formatStatsNumber(WordStatsHelper.countCharacters(statsText)),
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.secondary
@@ -453,4 +387,67 @@ private fun insertHtmlTag(originalText: String, startTag: String, endTag: String
 
 private fun formatStatsNumber(number: Int): String {
     return java.text.DecimalFormat("#,###").format(number)
+}
+
+fun htmlToPlainText(html: String): String {
+    if (html.isBlank()) return ""
+    
+    // Extract everything within <body> tag if it exists
+    val bodyRegex = Regex("<body[^>]*>(.*?)</body>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+    val bodyMatch = bodyRegex.find(html)
+    val bodyContent = bodyMatch?.groupValues?.get(1) ?: html
+
+    // Erase comments, styled blocks, script blocks
+    var clean = bodyContent
+        .replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
+        .replace(Regex("<style[^>]*>.*?</style>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+        .replace(Regex("<script[^>]*>.*?</script>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+
+    // Normalize block tags
+    clean = clean
+        .replace(Regex("</p>", RegexOption.IGNORE_CASE), "\n\n")
+        .replace(Regex("</div>", RegexOption.IGNORE_CASE), "\n\n")
+        .replace(Regex("</h1>|</h2>|</h3>|</h4>|</h5>|</h6>|</td>|</tr>", RegexOption.IGNORE_CASE), "\n\n")
+        .replace(Regex("<br[^>]*>", RegexOption.IGNORE_CASE), "\n")
+        .replace(Regex("<li[^>]*>", RegexOption.IGNORE_CASE), "\n• ")
+        .replace(Regex("</li>", RegexOption.IGNORE_CASE), "\n")
+
+    // Strip remaining tags
+    clean = clean.replace(Regex("<[^>]*>"), "")
+
+    // Replace HTML entities
+    clean = clean
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+
+    // Trim and normalize multiple whitespace and linebreaks
+    val lines = clean.split("\n").map { it.trim() }
+    val result = lines.joinToString("\n")
+        .replace(Regex("\n{3,}"), "\n\n")
+        .trim()
+        
+    return result
+}
+
+fun plainTextToHtml(plainText: String): String {
+    if (plainText.isBlank()) return ""
+    val lines = plainText.split(Regex("\n+"))
+    val sb = java.lang.StringBuilder()
+    for (line in lines) {
+        val trimmed = line.trim()
+        if (trimmed.isNotEmpty()) {
+            val escaped = trimmed
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
+                .replace("'", "&apos;")
+            sb.append("<p>").append(escaped).append("</p>\n")
+        }
+    }
+    return sb.toString().trim()
 }
