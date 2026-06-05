@@ -1,0 +1,6 @@
+{
+  "name": "EpubEdit",
+  "description": "High-fidelity EPUB eBook titles, files and chapters editor featuring visual rich editing, chapter merge export, custom cover and detailed precise statistics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
