@@ -168,6 +168,72 @@ class BookViewModel(private val repository: BookRepository) : ViewModel() {
         }
     }
 
+    fun convertAndImportFile(context: Context, titleId: Long, uri: Uri, fileName: String, fileSize: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val ext = fileName.substringAfterLast(".", "").lowercase()
+                val tempEpubFile = File(context.cacheDir, "${java.util.UUID.randomUUID()}_converted.epub")
+                
+                val inputStream = context.contentResolver.openInputStream(uri) ?: return@launch
+                var success = false
+                
+                if (ext == "fb2") {
+                    success = com.example.util.BookConverter.convertFb2ToEpub(context, inputStream, tempEpubFile)
+                } else if (ext == "pdf") {
+                    success = com.example.util.BookConverter.convertPdfToEpub(context, inputStream, tempEpubFile)
+                }
+                inputStream.close()
+
+                if (success && tempEpubFile.exists()) {
+                    val convertedName = fileName.replace(Regex("\\.(fb2|pdf)$", RegexOption.IGNORE_CASE), "") + " (Converted).epub"
+                    val fileLength = tempEpubFile.length()
+                    val convertedUri = Uri.fromFile(tempEpubFile)
+                    
+                    val parsed = EpubProcessor.parseEpub(context, convertedUri)
+                    if (parsed != null) {
+                        val nextFileIndex = repository.getSourceFilesForTitleOneShot(titleId).size
+                        val sfId = repository.insertSourceFile(
+                            SourceFile(
+                                titleId = titleId,
+                                fileName = convertedName,
+                                fileSize = fileLength,
+                                orderIndex = nextFileIndex,
+                                uploadedAt = System.currentTimeMillis()
+                            )
+                        )
+
+                        val currentTitle = repository.getTitleByIdOneShot(titleId)
+                        if (currentTitle != null && currentTitle.coverImage.isNullOrEmpty() && parsed.coverImagePath != null) {
+                            val updatedTitle = currentTitle.copy(coverImage = parsed.coverImagePath)
+                            repository.updateTitle(updatedTitle)
+                        }
+
+                        val nextChapterIndex = repository.getChaptersForTitleOneShot(titleId).size
+                        parsed.chapters.forEachIndexed { i, pc ->
+                            repository.insertChapter(
+                                Chapter(
+                                    titleId = titleId,
+                                    sourceFileId = sfId,
+                                    title = pc.title,
+                                    contentHtml = pc.contentHtml,
+                                    orderIndex = nextChapterIndex + i,
+                                    wordCount = pc.wordCount,
+                                    characterCount = pc.characterCount,
+                                    previewImagePath = pc.previewImagePath
+                                )
+                            )
+                        }
+                    }
+                    try { tempEpubFile.delete() } catch (ignored: Exception) {}
+                } else {
+                    Log.e("BookViewModel", "Failed converting file $fileName to EPUB")
+                }
+            } catch (e: Exception) {
+                Log.e("BookViewModel", "Failed convert and import file process", e)
+            }
+        }
+    }
+
     fun renameSourceFile(file: SourceFile, newName: String) {
         viewModelScope.launch {
             repository.updateSourceFile(file.copy(fileName = newName))

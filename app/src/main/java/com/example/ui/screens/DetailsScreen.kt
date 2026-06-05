@@ -184,17 +184,65 @@ fun FilesTabContent(
     var fileToRename by remember { mutableStateOf<SourceFile?>(null) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameInputText by remember { mutableStateOf("") }
+    var showImportHubDialog by remember { mutableStateOf(false) }
 
-    val filePickerLauncher = rememberLauncherForActivityResult(
+    // Unified launcher
+    val unifiedLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetMultipleContents()
     ) { uris ->
         uris.forEach { uri ->
-            val fileName = getFileNameFromUri(context, uri) ?: "imported_chapter.epub"
+            val fileName = getFileNameFromUri(context, uri) ?: "imported_file"
+            val fileSize = getFileSizeFromUri(context, uri)
+            val ext = fileName.substringAfterLast(".", "").lowercase()
+            when (ext) {
+                "epub" -> {
+                    viewModel.importEpub(context, titleId, uri, fileName, fileSize)
+                    Toast.makeText(context, "Импорт EPUB тома запущен...", Toast.LENGTH_SHORT).show()
+                }
+                "fb2", "pdf" -> {
+                    Toast.makeText(context, "Конвертация книги $fileName запущена...", Toast.LENGTH_LONG).show()
+                    viewModel.convertAndImportFile(context, titleId, uri, fileName, fileSize)
+                }
+                else -> {
+                    Toast.makeText(context, "Конвертер: Формат .$ext не поддерживается. Выберите EPUB, FB2 или PDF.", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    // Individual standard launchers for maximum Android compatibility
+    val epubLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris ->
+        uris.forEach { uri ->
+            val fileName = getFileNameFromUri(context, uri) ?: "book.epub"
             val fileSize = getFileSizeFromUri(context, uri)
             viewModel.importEpub(context, titleId, uri, fileName, fileSize)
         }
         if (uris.isNotEmpty()) {
             Toast.makeText(context, "Импорт ${uris.size} EPUB томов запущен...", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val fb2Launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris ->
+        uris.forEach { uri ->
+            val fileName = getFileNameFromUri(context, uri) ?: "book.fb2"
+            val fileSize = getFileSizeFromUri(context, uri)
+            Toast.makeText(context, "Конвертация FB2 $fileName в EPUB...", Toast.LENGTH_SHORT).show()
+            viewModel.convertAndImportFile(context, titleId, uri, fileName, fileSize)
+        }
+    }
+
+    val pdfLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetMultipleContents()
+    ) { uris ->
+        uris.forEach { uri ->
+            val fileName = getFileNameFromUri(context, uri) ?: "document.pdf"
+            val fileSize = getFileSizeFromUri(context, uri)
+            Toast.makeText(context, "Извлечение глав из PDF $fileName...", Toast.LENGTH_SHORT).show()
+            viewModel.convertAndImportFile(context, titleId, uri, fileName, fileSize)
         }
     }
 
@@ -222,11 +270,21 @@ fun FilesTabContent(
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "Загрузите epub тома для извлечения его глав.",
+                    text = "Импортируйте книги EPUB напрямую или загрузите FB2/PDF для автоматической конвертации в EPUB.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
-                    fontSize = 14.sp
+                    fontSize = 14.sp,
+                    modifier = Modifier.padding(horizontal = 16.dp)
                 )
+                Spacer(modifier = Modifier.height(24.dp))
+                Button(
+                    onClick = { showImportHubDialog = true },
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(imageVector = Icons.Default.AutoAwesome, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Импорт и Конвертация")
+                }
             }
         } else {
             LazyColumn(
@@ -268,9 +326,9 @@ fun FilesTabContent(
             }
         }
 
-        // Floating button to Import files
+        // Floating action button triggers the advanced conversion hub dialog
         FloatingActionButton(
-            onClick = { filePickerLauncher.launch("application/epub+zip") },
+            onClick = { showImportHubDialog = true },
             containerColor = MaterialTheme.colorScheme.primaryContainer,
             contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
             modifier = Modifier
@@ -279,8 +337,230 @@ fun FilesTabContent(
         ) {
             Icon(
                 imageVector = Icons.Default.CloudUpload,
-                contentDescription = "Загрузить файлы"
+                contentDescription = "Импорт книг"
             )
+        }
+    }
+
+    // Beautiful Hub modal dialog with premium, clean Material 3 design and conversion cards
+    if (showImportHubDialog) {
+        Dialog(onDismissRequest = { showImportHubDialog = false }) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .wrapContentHeight(),
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 6.dp
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(MaterialTheme.colorScheme.primaryContainer),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "Импорт и Конвертация",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Встроенный конвертер книг",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Text(
+                        text = "Выберите книгу или документ. Форматы FB2 и PDF будут автоматически адаптированы, разделены на главы и скомпилированы в EPUB для удобного редактирования.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Start
+                    )
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    // Mode 1: EPUB Card
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showImportHubDialog = false
+                                epubLauncher.launch("application/epub+zip")
+                            },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        ),
+                        border = RowBorder(Color.Blue.copy(alpha = 0.1f))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Book,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(32.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Импортировать EPUB",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Считывание оригинальных файлов .epub напрямую",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Mode 2: FB2 Card
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showImportHubDialog = false
+                                // fb2 often picked with text/xml, application/xml, or wildcard
+                                fb2Launcher.launch("*/*")
+                            },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        ),
+                        border = RowBorder(Color.Green.copy(alpha = 0.1f))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MenuBook,
+                                contentDescription = null,
+                                tint = Color(0xFF2E7D32),
+                                modifier = Modifier.size(32.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Конвертировать FB2 в EPUB",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Преобразование XML тегов, разделов и иллюстраций",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Mode 3: PDF Card
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showImportHubDialog = false
+                                pdfLauncher.launch("application/pdf")
+                            },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        ),
+                        border = RowBorder(Color.Red.copy(alpha = 0.1f))
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Description,
+                                contentDescription = null,
+                                tint = Color(0xFFC62828),
+                                modifier = Modifier.size(32.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Конвертировать PDF в EPUB",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Извлечение текстового слоя (декодирование Win-1251 и UTF-8)",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Selector for unified files
+                    OutlinedButton(
+                        onClick = {
+                            showImportHubDialog = false
+                            unifiedLauncher.launch("*/*")
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(imageVector = Icons.Default.FolderOpen, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Выбрать любой другой файл")
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    TextButton(
+                        onClick = { showImportHubDialog = false },
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
+                        Text("Закрыть", color = MaterialTheme.colorScheme.outline)
+                    }
+                }
+            }
         }
     }
 
@@ -319,6 +599,9 @@ fun FilesTabContent(
         )
     }
 }
+
+@Composable
+private fun RowBorder(color: Color) = androidx.compose.foundation.BorderStroke(1.dp, color)
 
 @Composable
 fun FileCard(
