@@ -157,38 +157,95 @@ object EpubProcessor {
         // Remove comments for cleaner regex
         val cleanHtml = html.replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
 
-        // Priority 1: First header h1 to h4 matching (most specific)
-        val headerTags = listOf("h1", "h2", "h3", "h4")
-        for (tag in headerTags) {
-            val regex = Regex("<$tag[^>]*>(.*?)</$tag>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-            val matches = regex.findAll(cleanHtml)
-            for (match in matches) {
-                val content = match.groupValues[1]
+        val tagRegex = Regex("<(h1|h2|h3|h4|p|div|span)(\\s+[^>]*)?>(.*?)</\\1>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+        val matches = tagRegex.findAll(cleanHtml)
+        val potentialTitles = mutableListOf<String>()
+        
+        for (match in matches) {
+            val tagName = match.groupValues[1].lowercase()
+            val attributes = match.groupValues[2] ?: ""
+            val content = match.groupValues[3]
+            
+            val isHeader = tagName in listOf("h1", "h2", "h3", "h4")
+            val hasTitleAttr = attributes.isNotEmpty() && (
+                attributes.contains("title", ignoreCase = true) ||
+                attributes.contains("chapter", ignoreCase = true) ||
+                attributes.contains("heading", ignoreCase = true) ||
+                attributes.contains("hdr", ignoreCase = true)
+            )
+            
+            if (isHeader || hasTitleAttr) {
                 val cleaned = stripHtmlTags(content).trim()
-                if (cleaned.isNotEmpty() && cleaned.length < 100) {
-                    return cleaned
+                if (cleaned.isNotEmpty() && cleaned.length < 150) {
+                    val normalized = cleaned.replace(Regex("\\s+"), " ")
+                    if (normalized.length > 1 && !potentialTitles.contains(normalized)) {
+                        potentialTitles.add(normalized)
+                    }
                 }
             }
         }
 
-        // Priority 2: Match divs/p with class containing "title" or "chapter" or "heading"
-        val containerRegex = Regex("<(?:p|div|span)[^>]+(?:class|id)=\"[^\"]*(?:title|chapter|heading)[^\"]*\"[^>]*>(.*?)</(?:p|div|span)>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-        val containerMatches = containerRegex.findAll(cleanHtml)
-        for (match in containerMatches) {
-            val content = match.groupValues[1]
-            val cleaned = stripHtmlTags(content).trim()
-            if (cleaned.isNotEmpty() && cleaned.length < 120) {
-                return cleaned
-            }
-        }
-
-        // Priority 3: Fallback to <title>
+        // Add fallback to <title> tag if potentialTitles is empty or doesn't have good info
         val titleRegex = Regex("<title[^>]*>(.*?)</title>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
         val titleMatch = titleRegex.find(cleanHtml)
         if (titleMatch != null) {
-            val cleaned = stripHtmlTags(titleMatch.groupValues[1]).trim()
-            if (cleaned.isNotEmpty() && cleaned.length < 100) {
-                return cleaned
+            val cleanedTitle = stripHtmlTags(titleMatch.groupValues[1]).trim().replace(Regex("\\s+"), " ")
+            if (cleanedTitle.isNotEmpty() && cleanedTitle.length < 150) {
+                if (!potentialTitles.contains(cleanedTitle)) {
+                    potentialTitles.add(cleanedTitle)
+                }
+            }
+        }
+
+        if (potentialTitles.isNotEmpty()) {
+            val junkWords = setOf("глава", "chapter", "том", "volume", "vol", "книга", "part", "часть")
+            val filteredTitles = potentialTitles.filter { t ->
+                val lower = t.lowercase().trim()
+                lower !in junkWords && lower.length > 2
+            }
+
+            val titlesToUse = if (filteredTitles.isNotEmpty()) filteredTitles else potentialTitles
+
+            var volumeTitle: String? = null
+            var chapterTitle: String? = null
+            var otherTitle: String? = null
+
+            for (title in titlesToUse) {
+                val lower = title.lowercase()
+                val isVol = lower.startsWith("том") || lower.contains("том ") || lower.contains("том\u00a0") || lower.contains("volume ") || lower.contains("книга ") || lower.contains("vol ")
+                val isChap = lower.contains("глава ") || lower.contains("глава\u00a0") || lower.contains("chapter ") || lower.contains("пролог") || 
+                             lower.contains("prologue") || lower.contains("эпилог") || lower.contains("epilogue") || lower.contains("интерлюдия") || 
+                             lower.contains("interlude") || lower.contains("послесловие") || lower.contains("afterword") || lower.contains("часть ")
+                
+                if (isVol) {
+                    if (volumeTitle == null) volumeTitle = title
+                } else if (isChap) {
+                    if (chapterTitle == null) chapterTitle = title
+                } else {
+                    if (otherTitle == null) otherTitle = title
+                }
+            }
+
+            if (volumeTitle != null && chapterTitle != null) {
+                if (volumeTitle.lowercase() != chapterTitle.lowercase()) {
+                    return "$volumeTitle - $chapterTitle"
+                } else {
+                    return chapterTitle
+                }
+            } else if (volumeTitle != null && otherTitle != null) {
+                if (volumeTitle.lowercase() != otherTitle.lowercase()) {
+                    return "$volumeTitle - $otherTitle"
+                } else {
+                    return otherTitle
+                }
+            } else if (chapterTitle != null) {
+                return chapterTitle
+            } else if (otherTitle != null) {
+                return otherTitle
+            } else if (volumeTitle != null) {
+                return volumeTitle
+            } else {
+                return titlesToUse.first()
             }
         }
 
