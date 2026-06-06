@@ -369,6 +369,7 @@ object BookConverter {
         }
 
         // 4. XHTML Chapter documents
+        val epub3NavList = StringBuilder()
         chapters.forEachIndexed { i, pc ->
             val id = "chapter_$i"
             val fileHref = "chapter_$i.xhtml"
@@ -396,6 +397,7 @@ object BookConverter {
 
             manifestItems.append("<item id=\"$id\" href=\"$fileHref\" media-type=\"application/xhtml+xml\"/>\n")
             spineItems.append("<itemref idref=\"$id\"/>\n")
+            epub3NavList.append("<li><a href=\"$fileHref\">${escapeXml(pc.title)}</a></li>\n")
             ncxNavMap.append("""
                 <navPoint id="$id" playOrder="${i + 1}">
                     <navLabel>
@@ -406,24 +408,51 @@ object BookConverter {
             """.trimIndent() + "\n")
         }
 
+        // 4b. EPUB 3 nav.xhtml Navigation document
+        val navHref = "nav.xhtml"
+        zos.putNextEntry(ZipEntry("OEBPS/$navHref"))
+        val navXhtml = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <!DOCTYPE html>
+            <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+            <head>
+                <title>Navigation</title>
+                <meta charset="utf-8" />
+            </head>
+            <body>
+                <nav epub:type="toc" id="toc">
+                    <h1>${escapeXml(title)}</h1>
+                    <ol>
+                        $epub3NavList
+                    </ol>
+                </nav>
+            </body>
+            </html>
+        """.trimIndent()
+        zos.write(navXhtml.toByteArray(Charsets.UTF_8))
+        zos.closeEntry()
+
         // 5. content.opf
         zos.putNextEntry(ZipEntry("OEBPS/content.opf"))
         val opf = """
             <?xml version="1.0" encoding="UTF-8"?>
-            <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="2.0">
+            <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="3.0">
                 <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
                     <dc:title>$escapedTitle</dc:title>
-                    <dc:creator>$escapedAuthor</dc:creator>
+                    <dc:creator id="creator">$escapedAuthor</dc:creator>
+                    <meta refines="#creator" property="role" scheme="marc:relators">aut</meta>
                     <dc:description>$escapedDesc</dc:description>
                     <dc:language>ru</dc:language>
                     <dc:identifier id="bookid">$bookUuid</dc:identifier>
+                    <meta property="dcterms:modified">2026-06-06T20:54:00Z</meta>
                     ${if (hasCover) "<meta name=\"cover\" content=\"cover-image\"/>" else ""}
                 </metadata>
                 <manifest>
-                    <item id="tcx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+                    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+                    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
                     $manifestItems
                 </manifest>
-                <spine toc="tcx">
+                <spine toc="ncx">
                     $spineItems
                 </spine>
             </package>
@@ -467,20 +496,43 @@ object BookConverter {
     }
 
     private fun containsAnyTitleRepresentation(contentHtml: String, chapterTitle: String): Boolean {
+        val cleanTitle = chapterTitle.lowercase().replace(Regex("[^\\p{L}\\p{N}]"), "").trim()
+        if (cleanTitle.isEmpty()) return false
+
+        // Extract text inside the first XML element if it's a heading (H1-H6)
+        val firstTagRegex = Regex("^\\s*<(h[1-6])(?:\\s+[^>]*)?>(.*?)</\\1>", RegexOption.IGNORE_CASE)
+        val firstTagMatch = firstTagRegex.find(contentHtml)
+        if (firstTagMatch != null) {
+            val headingText = firstTagMatch.groupValues[2].replace(Regex("<[^>]*>"), "").lowercase().replace(Regex("[^\\p{L}\\p{N}]"), "").trim()
+            if (headingText.contains(cleanTitle) || cleanTitle.contains(headingText)) {
+                return true
+            }
+        }
+        
+        // Also check if any H1-H4 exists in the first 500 characters
+        val anyHeaderRegex = Regex("<(h1|h2|h3|h4)(?:\\s+[^>]*)?>(.*?)</\\1>", RegexOption.IGNORE_CASE)
+        val anyHeaderMatches = anyHeaderRegex.findAll(contentHtml.take(500))
+        for (m in anyHeaderMatches) {
+            val hText = m.groupValues[2].replace(Regex("<[^>]*>"), "").lowercase().replace(Regex("[^\\p{L}\\p{N}]"), "").trim()
+            if (hText.contains(cleanTitle) || cleanTitle.contains(hText)) {
+                return true
+            }
+        }
+
+        // Standard direct contains check of the initial normalized text
         val cleanText = contentHtml.replace(Regex("<[^>]*>"), "")
             .lowercase()
             .replace(Regex("[^\\p{L}\\p{N}]"), "")
-        
-        val cleanTitle = chapterTitle.lowercase()
-            .replace(Regex("[^\\p{L}\\p{N}]"), "")
+            .trim()
             
-        if (cleanTitle.isEmpty() || cleanText.isEmpty()) return false
+        if (cleanText.isEmpty()) return false
         
-        // 1. Direct contains check of normalized strings
-        if (cleanText.take(400).contains(cleanTitle)) return true
-        if (cleanTitle.contains(cleanText.take(20))) return true
+        val initialSegment = cleanText.take(200)
+        if (initialSegment.contains(cleanTitle)) return true
         
-        // 2. Word-by-word intersection check (e.g. "Глава 1. Пролог" vs "Пролог")
+        if (cleanTitle.contains(initialSegment.take(30)) && initialSegment.take(30).length >= 10) return true
+        
+        // Word intersection
         val titleWords = chapterTitle.lowercase()
             .split(Regex("[^\\p{L}\\p{N}]+"))
             .filter { it.length > 2 && it != "глава" && it != "chapter" }
