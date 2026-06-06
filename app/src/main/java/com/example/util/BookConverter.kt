@@ -184,8 +184,38 @@ object BookConverter {
 
                         // Extract content recursively
                         val htmlContent = renderNodeToHtml(section, extractedImagesRaw)
-
                         val cleanContent = htmlContent.trim()
+
+                        // If title is just a number or very short, try to pull a more informative title from the HTML content
+                        val isNumeric = secTitle.matches(Regex("\\d+"))
+                        val isVeryShort = secTitle.length <= 4
+                        val lowerSecTitle = secTitle.lowercase()
+                        val isUninformative = isNumeric || isVeryShort ||
+                            lowerSecTitle in setOf("untitled", "untitled chapter", "chapter", "glava", "глава", "часть", "номер") ||
+                            lowerSecTitle.matches(Regex("(chapter|chap|ch|sec|section|part|page|vol|volume)[_\\-\\s]*\\d+"))
+                        
+                        if (isUninformative && cleanContent.isNotBlank()) {
+                            // Find the first heading or bold/subtitle element in cleanContent
+                            val headingRegex = Regex("<(h1|h2|h3|h4|h5|subtitle)(?:\\s+[^>]*)?>(.*?)</\\1>", RegexOption.IGNORE_CASE)
+                            val headingMatch = headingRegex.find(cleanContent)
+                            if (headingMatch != null) {
+                                val extracted = headingMatch.groupValues[2].replace(Regex("<[^>]*>"), "").replace(Regex("&nbsp;"), " ").trim()
+                                if (extracted.length in 2..150 && extracted.lowercase() != lowerSecTitle) {
+                                    secTitle = extracted.replace(Regex("\\s+"), " ")
+                                }
+                            } else {
+                                // Or find the first paragraph that might be a bold chapter title or subtitle
+                                val boldPRegex = Regex("<p(?:\\s+[^>]*)?>\\s*<(b|strong)(?:\\s+[^>]*)?>(.*?)</\\1>\\s*</p>", RegexOption.IGNORE_CASE)
+                                val boldPMatch = boldPRegex.find(cleanContent.take(1000))
+                                if (boldPMatch != null) {
+                                    val extracted = boldPMatch.groupValues[2].replace(Regex("<[^>]*>"), "").replace(Regex("&nbsp;"), " ").trim()
+                                    if (extracted.length in 2..150 && extracted.lowercase() != lowerSecTitle && !extracted.matches(Regex("\\d+"))) {
+                                        secTitle = extracted.replace(Regex("\\s+"), " ")
+                                    }
+                                }
+                            }
+                        }
+
                         if (cleanContent.isNotBlank()) {
                             chapters.add(
                                 ParsedChapter(

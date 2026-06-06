@@ -432,9 +432,15 @@ object EpubProcessor {
                         val isGenericShort = bestTitle.lowercase() in setOf("гл", "гл.", "ch", "ch.", "chapter", "глава", "часть", "том")
                         val isVeryShort = bestTitle.length <= 4
                         
-                        if (isNumeric || isGenericShort || isVeryShort) {
+                        val lowerTitle = bestTitle.lowercase()
+                        val isUninformative = isNumeric || isGenericShort || isVeryShort ||
+                            lowerTitle.matches(Regex("(chapter|chap|ch|sec|section|part|page|vol|volume|xhtml|html)[_\\-\\s]*\\d+")) ||
+                            lowerTitle in setOf("untitled", "untitled chapter", "chapter", "chapter-title", "cover", "title", "titlepage", "toc", "index", "navigation", "navpoint") ||
+                            lowerTitle.endsWith(".xhtml") || lowerTitle.endsWith(".html") || lowerTitle.endsWith(".htm")
+                        
+                        if (isUninformative) {
                             val extracted = extractTitleFromHtml(htmlSegment, decodedFileHref)
-                            if (extracted.isNotEmpty() && extracted != "Untitled Chapter" && extracted.length > bestTitle.length) {
+                            if (extracted.isNotEmpty() && extracted != "Untitled Chapter" && extracted.length > 2) {
                                 bestTitle = extracted
                             }
                         }
@@ -581,6 +587,21 @@ object EpubProcessor {
         // Remove comments for cleaner regex
         val cleanHtml = html.replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
 
+        // 1. Check <title> tag inside <head> if it exists and is informative
+        val headTitleRegex = Regex("<title(?:\\s+[^>]*)?>(.*?)</title>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+        val headTitleMatch = headTitleRegex.find(cleanHtml)
+        if (headTitleMatch != null) {
+            val headTitle = stripHtmlTags(headTitleMatch.groupValues[1]).trim()
+            val lower = headTitle.lowercase()
+            val isUninformative = headTitle.isEmpty() ||
+                lower in setOf("untitled", "untitled chapter", "chapter", "glava", "глава", "navigation", "toc", "index") ||
+                lower.matches(Regex("\\d+")) ||
+                lower.matches(Regex("(chapter|chap|ch|sec|section|part|page|vol|volume|xhtml|html)[_\\-\\s]*\\d+"))
+            if (!isUninformative && headTitle.length < 150) {
+                return headTitle.replace(Regex("\\s+"), " ")
+            }
+        }
+
         val tagRegex = Regex("<(h1|h2|h3|h4|p|div|span)(\\s+[^>]*)?>(.*?)</\\1>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
         val matches = tagRegex.findAll(cleanHtml)
         val potentialTitles = mutableListOf<String>()
@@ -597,9 +618,25 @@ object EpubProcessor {
                 attributes.contains("heading", ignoreCase = true) ||
                 attributes.contains("hdr", ignoreCase = true)
             )
+
+            val textContentClean = stripHtmlTags(content).trim()
+            val startsWithChapterKeyword = textContentClean.isNotEmpty() && (
+                textContentClean.lowercase().startsWith("глава") ||
+                textContentClean.lowercase().startsWith("chapter") ||
+                textContentClean.lowercase().startsWith("часть") ||
+                textContentClean.lowercase().startsWith("part") ||
+                textContentClean.lowercase().startsWith("пролог") ||
+                textContentClean.lowercase().startsWith("prologue") ||
+                textContentClean.lowercase().startsWith("эпилог") ||
+                textContentClean.lowercase().startsWith("epilogue") ||
+                textContentClean.lowercase().startsWith("интерлюдия") ||
+                textContentClean.lowercase().startsWith("interlude") ||
+                textContentClean.lowercase().startsWith("послесловие") ||
+                textContentClean.lowercase().startsWith("afterword")
+            )
             
-            if (isHeader || hasTitleAttr) {
-                val cleaned = stripHtmlTags(content).trim()
+            if (isHeader || hasTitleAttr || (startsWithChapterKeyword && textContentClean.length < 120)) {
+                val cleaned = if (startsWithChapterKeyword) textContentClean else stripHtmlTags(content).trim()
                 if (cleaned.isNotEmpty() && cleaned.length < 150) {
                     val normalized = cleaned.replace(Regex("\\s+"), " ")
                     if (normalized.length > 1 && !potentialTitles.contains(normalized)) {
