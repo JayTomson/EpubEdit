@@ -77,7 +77,13 @@ object BookConverter {
 
             // 2. Extract Binaries (images)
             val extractedImagesRaw = mutableMapOf<String, ByteArray>() // id -> bytes
-            val binaryNodes = doc.getElementsByTagNameNS("*", "binary")
+            var binaryNodes = doc.getElementsByTagNameNS("*", "binary")
+            if (binaryNodes.length == 0) {
+                binaryNodes = doc.getElementsByTagName("binary")
+            }
+            if (binaryNodes.length == 0) {
+                binaryNodes = doc.getElementsByTagName("fb2:binary")
+            }
             for (i in 0 until binaryNodes.length) {
                 val binaryNode = binaryNodes.item(i) as Element
                 val id = binaryNode.getAttribute("id")
@@ -86,6 +92,7 @@ object BookConverter {
                     try {
                         val bytes = Base64.decode(base64Text, Base64.DEFAULT)
                         extractedImagesRaw[id] = bytes
+                        extractedImagesRaw[id.lowercase()] = bytes
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed decoding base64 image $id", e)
                     }
@@ -101,14 +108,22 @@ object BookConverter {
 
             // 3. Find cover image
             var coverImageId: String? = null
-            val coverpageNodes = doc.getElementsByTagNameNS("*", "coverpage")
+            var coverpageNodes = doc.getElementsByTagNameNS("*", "coverpage")
+            if (coverpageNodes.length == 0) {
+                coverpageNodes = doc.getElementsByTagName("coverpage")
+            }
             if (coverpageNodes.length > 0) {
-                val imgNodes = (coverpageNodes.item(0) as Element).getElementsByTagNameNS("*", "image")
+                var imgNodes = (coverpageNodes.item(0) as Element).getElementsByTagNameNS("*", "image")
+                if (imgNodes.length == 0) {
+                    imgNodes = (coverpageNodes.item(0) as Element).getElementsByTagName("image")
+                }
                 if (imgNodes.length > 0) {
                     val imgEl = imgNodes.item(0) as Element
-                    val rawTarget = getAttributeCoalesce(imgEl, "href", "l:href", "xlink:href")?.removePrefix("#")
+                    val rawTarget = getAttributeCoalesce(imgEl, "href", "l:href", "xlink:href")?.removePrefix("#")?.trim()
                     if (rawTarget != null) {
-                        val bytes = extractedImagesRaw[rawTarget]
+                        val bytes = extractedImagesRaw[rawTarget] 
+                            ?: extractedImagesRaw[rawTarget.lowercase()]
+                            ?: extractedImagesRaw.entries.firstOrNull { it.key.equals(rawTarget, ignoreCase = true) }?.value
                         if (bytes != null) {
                             coverImageId = ensureImageExtension(rawTarget, bytes)
                         }
@@ -123,15 +138,24 @@ object BookConverter {
 
             // 4. Parse Sections recursively (Chapters)
             val chapters = mutableListOf<ParsedChapter>()
-            val bodyNodes = doc.getElementsByTagNameNS("*", "body")
+            var bodyNodes = doc.getElementsByTagNameNS("*", "body")
+            if (bodyNodes.length == 0) {
+                bodyNodes = doc.getElementsByTagName("body")
+            }
             
             for (b in 0 until bodyNodes.length) {
                 val bodyEl = bodyNodes.item(b) as Element
-                val sections = bodyEl.getElementsByTagNameNS("*", "section")
+                var sections = bodyEl.getElementsByTagNameNS("*", "section")
+                if (sections.length == 0) {
+                    sections = bodyEl.getElementsByTagName("section")
+                }
                 
                 if (sections.length == 0) {
                     // Try parsing body paragraphs directly as one giant chapter if no sections
-                    val paragraphs = bodyEl.getElementsByTagNameNS("*", "p")
+                    var paragraphs = bodyEl.getElementsByTagNameNS("*", "p")
+                    if (paragraphs.length == 0) {
+                        paragraphs = bodyEl.getElementsByTagName("p")
+                    }
                     val htmlContent = StringBuilder()
                     for (p in 0 until paragraphs.length) {
                         htmlContent.append("<p>${paragraphs.item(p).textContent}</p>\n")
@@ -146,7 +170,10 @@ object BookConverter {
 
                         // Extract section title
                         var secTitle = "Глава ${chapters.size + 1}"
-                        val titleEls = section.getElementsByTagNameNS("*", "title")
+                        var titleEls = section.getElementsByTagNameNS("*", "title")
+                        if (titleEls.length == 0) {
+                            titleEls = section.getElementsByTagName("title")
+                        }
                         if (titleEls.length > 0) {
                             val titleEl = titleEls.item(0) as Element
                             secTitle = titleEl.textContent.trim().replace(Regex("\\s+"), " ")
@@ -342,6 +369,14 @@ object BookConverter {
             val fileHref = "chapter_$i.xhtml"
             zos.putNextEntry(ZipEntry("OEBPS/$fileHref"))
 
+            val containsTitleHeader = pc.contentHtml.trim().let { trimmed ->
+                trimmed.startsWith("<h1", ignoreCase = true) ||
+                trimmed.startsWith("<h2", ignoreCase = true) ||
+                trimmed.startsWith("<h3", ignoreCase = true) ||
+                trimmed.replace(Regex("<[^>]*>"), "").take(150).contains(pc.title, ignoreCase = true)
+            }
+            val headerTag = if (containsTitleHeader) "" else "<h1>${pc.title}</h1>\n"
+
             val xhtml = """
                 <?xml version="1.0" encoding="utf-8"?>
                 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
@@ -351,8 +386,7 @@ object BookConverter {
                     <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
                 </head>
                 <body>
-                    <h1>${pc.title}</h1>
-                    ${pc.contentHtml}
+                    $headerTag${pc.contentHtml}
                 </body>
                 </html>
             """.trimIndent()

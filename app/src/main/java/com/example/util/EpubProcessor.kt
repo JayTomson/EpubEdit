@@ -228,20 +228,20 @@ object EpubProcessor {
         if (ncxFileResolved != null && ncxFileResolved.exists()) {
             try {
                 val dbFactory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
-                dbFactory.isNamespaceAware = true
+                dbFactory.isNamespaceAware = false
                 val dBuilder = dbFactory.newDocumentBuilder()
                 val doc = dBuilder.parse(ncxFileResolved)
                 doc.documentElement.normalize()
 
-                val navPoints = doc.getElementsByTagNameNS("*", "navPoint")
+                val navPoints = doc.getElementsByTagName("navPoint")
                 for (i in 0 until navPoints.length) {
                     val node = navPoints.item(i)
                     if (node is org.w3c.dom.Element) {
                         var title = ""
-                        val navLabels = node.getElementsByTagNameNS("*", "navLabel")
+                        val navLabels = node.getElementsByTagName("navLabel")
                         if (navLabels.length > 0) {
                             val labelEl = navLabels.item(0) as org.w3c.dom.Element
-                            val texts = labelEl.getElementsByTagNameNS("*", "text")
+                            val texts = labelEl.getElementsByTagName("text")
                             if (texts.length > 0) {
                                 title = texts.item(0).textContent ?: ""
                             }
@@ -252,7 +252,7 @@ object EpubProcessor {
                         }
 
                         var srcAttr: String? = null
-                        val contents = node.getElementsByTagNameNS("*", "content")
+                        val contents = node.getElementsByTagName("content")
                         if (contents.length > 0) {
                             val contentEl = contents.item(0) as org.w3c.dom.Element
                             srcAttr = contentEl.getAttribute("src")
@@ -663,12 +663,62 @@ object EpubProcessor {
                 }
             }
 
+            // Extract and package illustrations/images referenced in chapters
+            val referencedImages = mutableSetOf<String>()
+            val imgPattern = Regex("<img[^>]+src\\s*=\\s*['\"]([^'\"]+)['\"][^>]*>", RegexOption.IGNORE_CASE)
+            val svgImagePattern = Regex("<image[^>]+(?:xlink:)?href\\s*=\\s*['\"]([^'\"]+)['\"][^>]*>", RegexOption.IGNORE_CASE)
+
+            chapters.forEach { chap ->
+                imgPattern.findAll(chap.contentHtml).forEach { match ->
+                    referencedImages.add(match.groupValues[1])
+                }
+                svgImagePattern.findAll(chap.contentHtml).forEach { match ->
+                    referencedImages.add(match.groupValues[1])
+                }
+            }
+
+            referencedImages.forEach { src ->
+                val resolvedPath = resolveLocalImagePath(context, src)
+                if (resolvedPath != null) {
+                    val imgFile = File(resolvedPath)
+                    if (imgFile.exists()) {
+                        try {
+                            zos.putNextEntry(ZipEntry("OEBPS/$src"))
+                            imgFile.inputStream().use { it.copyTo(zos) }
+                            zos.closeEntry()
+
+                            val ext = src.substringAfterLast(".", "jpg").lowercase()
+                            val mediaType = when (ext) {
+                                "png" -> "image/png"
+                                "gif" -> "image/gif"
+                                "webp" -> "image/webp"
+                                else -> "image/jpeg"
+                            }
+                            val manifestId = "img_${src.replace("[^a-zA-Z0-9]".toRegex(), "_")}"
+                            manifestItems.append("<item id=\"$manifestId\" href=\"$src\" media-type=\"$mediaType\"/>\n")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed packing image $src to EPUB", e)
+                        }
+                    }
+                }
+            }
+
             // Loop and add chapters
             chapters.forEachIndexed { idx, chap ->
                 val chapId = "chapter_$idx"
                 val href = "chapter_$idx.xhtml"
                 
                 zos.putNextEntry(ZipEntry("OEBPS/$href"))
+                
+                // Smart Title check to avoid visual repetition in advanced readers
+                val containsTitleHeader = chap.contentHtml.trim().let { trimmed ->
+                    trimmed.startsWith("<h1", ignoreCase = true) ||
+                    trimmed.startsWith("<h2", ignoreCase = true) ||
+                    trimmed.startsWith("<h3", ignoreCase = true) ||
+                    stripHtmlTags(trimmed).take(150).contains(chap.title, ignoreCase = true)
+                }
+                val headerTag = if (containsTitleHeader) "" else "<h1>${chap.title}</h1>\n"
+
                 // Standard XHTML template for high readers compatibility
                 val xhtmlContent = """
                     <?xml version="1.0" encoding="utf-8"?>
@@ -679,8 +729,7 @@ object EpubProcessor {
                         <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
                     </head>
                     <body>
-                        <h1>${chap.title}</h1>
-                        ${chap.contentHtml}
+                        $headerTag${chap.contentHtml}
                     </body>
                     </html>
                 """.trimIndent()
@@ -837,7 +886,8 @@ object EpubProcessor {
 }
 
 sealed class ContentBlock {
-    data class Text(val htmlText: String) : ContentBlock()
-    data class Image(val localPath: String) : ContentBlock()
+    abstract val id: String
+    data class Text(val htmlText: String, override val id: String = java.util.UUID.randomUUID().toString()) : ContentBlock()
+    data class Image(val localPath: String, override val id: String = java.util.UUID.randomUUID().toString()) : ContentBlock()
 }
 
