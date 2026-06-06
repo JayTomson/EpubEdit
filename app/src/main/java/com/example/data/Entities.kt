@@ -53,7 +53,7 @@ data class SourceFile(
             entity = SourceFile::class,
             parentColumns = ["id"],
             childColumns = ["sourceFileId"],
-            onDelete = ForeignKey.CASCADE
+            onDelete = ForeignKey.SET_NULL
         )
     ],
     indices = [

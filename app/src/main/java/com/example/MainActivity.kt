@@ -28,7 +28,7 @@ class MainActivity : ComponentActivity() {
         val repository = BookRepository(database.bookDao())
         
         // Setup ViewModel Custom Factory
-        val viewModelFactory = BookViewModelFactory(repository)
+        val viewModelFactory = BookViewModelFactory(application, repository)
         val viewModel = ViewModelProvider(this, viewModelFactory)[BookViewModel::class.java]
 
         setContent {

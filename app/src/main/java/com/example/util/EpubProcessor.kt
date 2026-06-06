@@ -40,24 +40,26 @@ object EpubProcessor {
         // 1. Unzip the whole EPUB into a temp directory to allow multi-pass lookups
         try {
             resolver.openInputStream(uri)?.use { inputStream ->
-                val zipInputStream = ZipInputStream(inputStream)
-                var entry: ZipEntry? = zipInputStream.getNextEntry()
-                while (entry != null) {
-                    val outFile = File(tempDir, entry.name)
-                    if (entry.isDirectory) {
-                        outFile.mkdirs()
-                    } else {
-                        outFile.parentFile?.mkdirs()
-                        FileOutputStream(outFile).use { fos ->
-                            zipInputStream.copyTo(fos)
+                ZipInputStream(inputStream).use { zipInputStream ->
+                    var entry: ZipEntry? = zipInputStream.getNextEntry()
+                    while (entry != null) {
+                        val outFile = File(tempDir, entry.name)
+                        if (entry.isDirectory) {
+                            outFile.mkdirs()
+                        } else {
+                            outFile.parentFile?.mkdirs()
+                            FileOutputStream(outFile).use { fos ->
+                                zipInputStream.copyTo(fos)
+                            }
                         }
+                        zipInputStream.closeEntry()
+                        entry = zipInputStream.getNextEntry()
                     }
-                    zipInputStream.closeEntry()
-                    entry = zipInputStream.getNextEntry()
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error unzipping EPUB", e)
+            tempDir.deleteRecursively()
             return null
         }
 
@@ -743,14 +745,22 @@ object EpubProcessor {
 
             // Add Cover image if exists
             var hasCover = false
+            var coverExt = "jpg"
             if (coverImagePath != null) {
                 val coverFile = File(coverImagePath)
                 if (coverFile.exists()) {
                     hasCover = true
-                    zos.putNextEntry(ZipEntry("OEBPS/cover.jpg"))
+                    coverExt = coverFile.extension.lowercase().let { if (it.isEmpty()) "jpg" else it }
+                    val mediaType = when (coverExt) {
+                        "png" -> "image/png"
+                        "webp" -> "image/webp"
+                        "gif" -> "image/gif"
+                        else -> "image/jpeg"
+                    }
+                    zos.putNextEntry(ZipEntry("OEBPS/cover.$coverExt"))
                     coverFile.inputStream().use { it.copyTo(zos) }
                     zos.closeEntry()
-                    manifestItems.append("<item id=\"cover-image\" href=\"cover.jpg\" media-type=\"image/jpeg\" properties=\"cover-image\"/>\n")
+                    manifestItems.append("<item id=\"cover-image\" href=\"cover.$coverExt\" media-type=\"$mediaType\" properties=\"cover-image\"/>\n")
                 }
             }
 
@@ -858,13 +868,15 @@ object EpubProcessor {
                 zos.write(xhtmlContent.toByteArray(Charsets.UTF_8))
                 zos.closeEntry()
 
+                val safeChapTitle = escapeXml(stripHtmlTags(chap.title ?: "Chapter ${idx + 1}")).trim()
+
                 manifestItems.append("<item id=\"$chapId\" href=\"$href\" media-type=\"application/xhtml+xml\"/>\n")
                 spineItems.append("<itemref idref=\"$chapId\"/>\n")
-                navList.append("<li><a href=\"$href\">${escapeXml(chap.title)}</a></li>\n")
+                navList.append("<li><a href=\"$href\">$safeChapTitle</a></li>\n")
                 ncxNavMap.append("""
                     <navPoint id="$chapId" playOrder="${idx + 1}">
                         <navLabel>
-                            <text>${escapeXml(chap.title)}</text>
+                            <text>$safeChapTitle</text>
                         </navLabel>
                         <content src="$href"/>
                     </navPoint>
@@ -915,6 +927,7 @@ object EpubProcessor {
                         $manifestItems
                     </manifest>
                     <spine toc="ncx">
+                        <itemref idref="nav" linear="no"/>
                         $spineItems
                     </spine>
                 </package>

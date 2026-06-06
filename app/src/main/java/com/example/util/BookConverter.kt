@@ -92,7 +92,6 @@ object BookConverter {
                     try {
                         val bytes = Base64.decode(base64Text, Base64.DEFAULT)
                         extractedImagesRaw[id] = bytes
-                        extractedImagesRaw[id.lowercase()] = bytes
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed decoding base64 image $id", e)
                     }
@@ -242,6 +241,7 @@ object BookConverter {
                         val href = getAttributeCoalesce(child, "href", "l:href", "xlink:href")?.removePrefix("#")
                         if (href != null) {
                             val rawBytes = extractedImagesRaw[href]
+                                ?: extractedImagesRaw.entries.firstOrNull { it.key.equals(href, ignoreCase = true) }?.value
                             if (rawBytes != null) {
                                 val finalHref = ensureImageExtension(href, rawBytes)
                                 sb.append("<div style=\"text-align:center; margin: 12px 0;\"><img src=\"$finalHref\" style=\"max-width:100%;\" /></div>\n")
@@ -289,11 +289,16 @@ object BookConverter {
     }
 
     private fun getAttributeCoalesce(el: Element, vararg names: String): String? {
-        for (name in names) {
-            val attr = el.getAttribute(name)
-            if (attr.isNotEmpty()) return attr
-            val localAttr = el.getAttributeNS("*", name)
-            if (localAttr.isNotEmpty()) return localAttr
+        val attributes = el.attributes
+        for (i in 0 until attributes.length) {
+            val attr = attributes.item(i)
+            val nodeName = attr.nodeName
+            val localName = attr.localName ?: nodeName.substringAfterLast(":")
+            for (name in names) {
+                if (nodeName == name || localName == name || localName == name.substringAfterLast(":")) {
+                    return attr.nodeValue
+                }
+            }
         }
         return null
     }
@@ -356,7 +361,9 @@ object BookConverter {
         val ncxNavMap = StringBuilder()
 
         if (hasCover && coverImageId != null) {
-            manifestItems.append("<item id=\"cover-image\" href=\"$coverImageId\" media-type=\"image/jpeg\" properties=\"cover-image\"/>\n")
+            val ext = coverImageId.substringAfterLast(".", "jpg").lowercase()
+            val coverMediaType = if (ext == "png") "image/png" else if (ext == "gif") "image/gif" else "image/jpeg"
+            manifestItems.append("<item id=\"cover-image\" href=\"$coverImageId\" media-type=\"$coverMediaType\" properties=\"cover-image\"/>\n")
         }
 
         // Add dynamically extracted images to manifest
@@ -364,7 +371,8 @@ object BookConverter {
             if (id != coverImageId) {
                 val ext = id.substringAfterLast(".", "jpg").lowercase()
                 val mediaType = if (ext == "png") "image/png" else if (ext == "gif") "image/gif" else "image/jpeg"
-                manifestItems.append("<item id=\"img_$id\" href=\"$id\" media-type=\"$mediaType\"/>\n")
+                val safeId = "img_" + id.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+                manifestItems.append("<item id=\"$safeId\" href=\"$id\" media-type=\"$mediaType\"/>\n")
             }
         }
 
@@ -402,13 +410,15 @@ object BookConverter {
             zos.write(xhtml.toByteArray(Charsets.UTF_8))
             zos.closeEntry()
 
+            val safeChapTitle = escapeXml((pc.title ?: "Chapter ${i + 1}").replace(Regex("<[^>]*>"), "")).trim()
+
             manifestItems.append("<item id=\"$id\" href=\"$fileHref\" media-type=\"application/xhtml+xml\"/>\n")
             spineItems.append("<itemref idref=\"$id\"/>\n")
-            epub3NavList.append("<li><a href=\"$fileHref\">${escapeXml(pc.title)}</a></li>\n")
+            epub3NavList.append("<li><a href=\"$fileHref\">$safeChapTitle</a></li>\n")
             ncxNavMap.append("""
                 <navPoint id="$id" playOrder="${i + 1}">
                     <navLabel>
-                        <text>${escapeXml(pc.title)}</text>
+                        <text>$safeChapTitle</text>
                     </navLabel>
                     <content src="$fileHref"/>
                 </navPoint>
@@ -460,6 +470,7 @@ object BookConverter {
                     $manifestItems
                 </manifest>
                 <spine toc="ncx">
+                    <itemref idref="nav" linear="no"/>
                     $spineItems
                 </spine>
             </package>

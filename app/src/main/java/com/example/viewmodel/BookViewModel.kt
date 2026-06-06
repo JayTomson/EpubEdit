@@ -17,7 +17,10 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 
-class BookViewModel(private val repository: BookRepository) : ViewModel() {
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+
+class BookViewModel(private val app: Application, private val repository: BookRepository) : AndroidViewModel(app) {
 
     val titles: StateFlow<List<Title>> = repository.allTitles
         .stateIn(
@@ -94,6 +97,15 @@ class BookViewModel(private val repository: BookRepository) : ViewModel() {
 
     fun deleteTitle(title: Title) {
         viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                try {
+                    val mediaDir = File(app.filesDir, "epub_media")
+                    mediaDir.listFiles { _, name -> name.startsWith("book_${title.id}_") }
+                        ?.forEach { it.delete() }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
             repository.deleteTitle(title)
             if (_selectedTitleId.value == title.id) {
                 _selectedTitleId.value = null
@@ -294,13 +306,13 @@ class BookViewModel(private val repository: BookRepository) : ViewModel() {
 
     fun keepSelectedChapters(chapterIds: List<Long>) {
         viewModelScope.launch {
-            val keeepSet = chapterIds.toSet()
+            val keepSet = chapterIds.toSet()
             val allChs = repository.getChaptersForTitleOneShot(_selectedTitleId.value ?: return@launch)
-            val toDelete = allChs.filter { it.id !in keeepSet }
+            val toDelete = allChs.filter { it.id !in keepSet }
             repository.deleteChapters(toDelete)
 
             // Re-index remaining chapters to keep orderIndex contiguous
-            val remaining = allChs.filter { it.id in keeepSet }
+            val remaining = allChs.filter { it.id in keepSet }
                 .mapIndexed { idx, ch -> ch.copy(orderIndex = idx) }
             repository.updateChaptersOrder(remaining)
         }
@@ -327,14 +339,7 @@ class BookViewModel(private val repository: BookRepository) : ViewModel() {
                 val allChs = repository.getChaptersForTitleOneShot(titleId)
                 val sourceFiles = repository.getSourceFilesForTitleOneShot(titleId).sortedBy { it.orderIndex }
                 
-                // Sort chapters first by their SourceFile's new order, then their own order
-                val sortedChs = mutableListOf<com.example.data.Chapter>()
-                sourceFiles.forEach { sf ->
-                    sortedChs.addAll(allChs.filter { it.sourceFileId == sf.id }.sortedBy { it.orderIndex })
-                }
-                // Append manual chapters (any chapter without a source file, or from a missing source file)
-                val manualChs = allChs.filter { ch -> ch.sourceFileId == null || sourceFiles.none { sf -> sf.id == ch.sourceFileId } }
-                sortedChs.addAll(manualChs.sortedBy { it.orderIndex })
+                val sortedChs = allChs.sortedBy { it.orderIndex }
                 
                 val plist = sortedChs.map {
                     ParsedChapter(
@@ -389,11 +394,11 @@ class BookViewModel(private val repository: BookRepository) : ViewModel() {
     }
 }
 
-class BookViewModelFactory(private val repository: BookRepository) : ViewModelProvider.Factory {
+class BookViewModelFactory(private val application: Application, private val repository: BookRepository) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(BookViewModel::class.java)) {
             @Suppress("UNCHECKED_CAST")
-            return BookViewModel(repository) as T
+            return BookViewModel(application, repository) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }
