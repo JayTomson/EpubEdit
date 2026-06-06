@@ -888,12 +888,51 @@ object EpubProcessor {
     /**
      * Parses the HTML content of a chapter into sequential Text and Image blocks.
      */
+    fun removeLeadingTitleFromHtml(html: String, chapterTitle: String): String {
+        if (chapterTitle.isBlank()) return html
+        
+        val cleanTitle = chapterTitle.lowercase().trim().replace(Regex("[^\\p{L}\\p{N}]"), "")
+        if (cleanTitle.isEmpty()) return html
+        
+        // Match the first structural block tag like h1-h6, p, or div
+        val regex = Regex("<(h[1-6]|p|div)(?:\\s+[^>]*)?>(.*?)</\\1>", RegexOption.IGNORE_CASE)
+        val matchResult = regex.find(html) ?: return html
+        
+        val tagInnerHtml = matchResult.groupValues[2]
+        val tagPlainText = tagInnerHtml.replace(Regex("<[^>]*>"), "")
+            .lowercase()
+            .trim()
+            .replace(Regex("[^\\p{L}\\p{N}]"), "")
+            
+        // Check if the first structural tag matches the chapter title
+        if (tagPlainText == cleanTitle || 
+            (tagPlainText.length > 2 && cleanTitle.contains(tagPlainText)) ||
+            (cleanTitle.length > 2 && tagPlainText.contains(cleanTitle) && cleanTitle.length > 0 && tagPlainText.length - cleanTitle.length < 5)) {
+            
+            // Only remove the matched tag block, preserving all subsequent html tags, newlines, formatting, etc.
+            val before = html.substring(0, matchResult.range.first)
+            val after = html.substring(matchResult.range.last + 1)
+            return before + after
+        }
+        
+        return html
+    }
+
+    /**
+     * Parses the HTML content of a chapter into sequential Text and Image blocks.
+     */
     fun parseContentIntoBlocks(
         context: Context, 
         html: String, 
         titleId: Long? = null, 
         chapterTitle: String? = null
     ): List<ContentBlock> {
+        val cleanedHtml = if (chapterTitle != null) {
+            removeLeadingTitleFromHtml(html, chapterTitle)
+        } else {
+            html
+        }
+
         val blocks = mutableListOf<ContentBlock>()
         
         // Match both HTML img tag and SVG XML image tags
@@ -903,11 +942,11 @@ object EpubProcessor {
         data class FoundImage(val start: Int, val end: Int, val src: String)
         val foundImages = mutableListOf<FoundImage>()
         
-        imgPattern.findAll(html).forEach { match ->
+        imgPattern.findAll(cleanedHtml).forEach { match ->
             foundImages.add(FoundImage(match.range.first, match.range.last + 1, match.groupValues[1]))
         }
         
-        svgImagePattern.findAll(html).forEach { match ->
+        svgImagePattern.findAll(cleanedHtml).forEach { match ->
             if (foundImages.none { it.start <= match.range.first && it.end >= match.range.last }) {
                 foundImages.add(FoundImage(match.range.first, match.range.last + 1, match.groupValues[1]))
             }
@@ -918,7 +957,7 @@ object EpubProcessor {
         var lastIdx = 0
         for (img in foundImages) {
             if (img.start > lastIdx) {
-                val intermediateText = html.substring(lastIdx, img.start).trim()
+                val intermediateText = cleanedHtml.substring(lastIdx, img.start).trim()
                 if (intermediateText.isNotEmpty()) {
                     blocks.add(ContentBlock.Text(intermediateText))
                 }
@@ -934,100 +973,14 @@ object EpubProcessor {
             lastIdx = img.end
         }
         
-        if (lastIdx < html.length) {
-            val remainingText = html.substring(lastIdx).trim()
+        if (lastIdx < cleanedHtml.length) {
+            val remainingText = cleanedHtml.substring(lastIdx).trim()
             if (remainingText.isNotEmpty()) {
                 blocks.add(ContentBlock.Text(remainingText))
             }
         }
         
-        return if (chapterTitle != null) {
-            cleanBlocksFromChapterTitle(blocks, chapterTitle)
-        } else {
-            blocks
-        }
-    }
-
-    private fun cleanBlocksFromChapterTitle(blocks: List<ContentBlock>, title: String): List<ContentBlock> {
-        if (title.isBlank()) return blocks
-        
-        val cleanTitle = title.lowercase()
-            .replace(Regex("[^\\p{L}\\p{N}]"), "")
-        if (cleanTitle.isEmpty()) return blocks
-
-        val cleanedList = mutableListOf<ContentBlock>()
-        var prefixCheckDone = false
-
-        for (block in blocks) {
-            if (block is ContentBlock.Text) {
-                val html = block.htmlText
-                val plain = stripHtmlTags(html).trim()
-                val cleanPlain = plain.lowercase().replace(Regex("[^\\p{L}\\p{N}]"), "")
-
-                if (cleanPlain.isEmpty()) {
-                    continue
-                }
-
-                // Case A: Entire block is identical or close matching structure to the title
-                if (cleanPlain == cleanTitle || 
-                    (cleanPlain.length > 3 && cleanTitle.contains(cleanPlain)) ||
-                    (cleanTitle.length > 3 && cleanPlain.contains(cleanTitle) && cleanPlain.length - cleanTitle.length < 5)) {
-                    continue
-                }
-
-                // Case B: Block begins with the title as a header prefix
-                if (!prefixCheckDone && cleanPlain.startsWith(cleanTitle)) {
-                    prefixCheckDone = true
-                    
-                    val lowerPlain = plain.lowercase()
-                    val lowerTitle = title.lowercase()
-                    val idx = lowerPlain.indexOf(lowerTitle)
-                    if (idx != -1) {
-                        val remainingText = plain.substring(idx + title.length).trim()
-                        if (remainingText.isNotEmpty()) {
-                            cleanedList.add(ContentBlock.Text("<p>$remainingText</p>"))
-                        }
-                        continue
-                    } else {
-                        // Soft char map comparison
-                        var matchCharCount = 0
-                        var textIndex = 0
-                        var titleIndex = 0
-                        while (textIndex < plain.length && titleIndex < title.length) {
-                            val tc = plain[textIndex].lowercaseChar()
-                            val tt = title[titleIndex].lowercaseChar()
-                            
-                            if (!tc.isLetterOrDigit()) {
-                                textIndex++
-                                continue
-                            }
-                            if (!tt.isLetterOrDigit()) {
-                                titleIndex++
-                                continue
-                            }
-                            
-                            if (tc == tt) {
-                                textIndex++
-                                titleIndex++
-                                matchCharCount++
-                            } else {
-                                break
-                            }
-                        }
-                        
-                        if (matchCharCount > 0 && titleIndex >= title.length * 0.8) {
-                            val remainingText = plain.substring(textIndex).trim()
-                            if (remainingText.isNotEmpty()) {
-                                cleanedList.add(ContentBlock.Text("<p>$remainingText</p>"))
-                            }
-                            continue
-                        }
-                    }
-                }
-            }
-            cleanedList.add(block)
-        }
-        return cleanedList
+        return blocks
     }
 }
 
