@@ -176,7 +176,50 @@ object EpubProcessor {
                 if (descriptions.length > 0) extractedDesc = descriptions.item(0).textContent
 
             } catch (e: Exception) {
-                Log.e(TAG, "Failed DOM reading content.opf", e)
+                Log.e(TAG, "Failed DOM reading content.opf, falling back to Regex parsing", e)
+                try {
+                    val opfText = opfFile.readText(Charsets.UTF_8)
+                    
+                    // Parse manifest items using Regex
+                    val itemRegex = Regex("<item\\s+([^>]*)\\s*/?>", RegexOption.IGNORE_CASE)
+                    val idRegex = Regex("id\\s*=\\s*['\"]([^'\"]+)['\"]", RegexOption.IGNORE_CASE)
+                    val hrefRegex = Regex("href\\s*=\\s*['\"]([^'\"]+)['\"]", RegexOption.IGNORE_CASE)
+                    val mediaTypeRegex = Regex("media-type\\s*=\\s*['\"]([^'\"]+)['\"]", RegexOption.IGNORE_CASE)
+                    
+                    itemRegex.find(opfText) // trigger parsing
+                    itemRegex.findAll(opfText).forEach { match ->
+                        val attrs = match.groupValues[1]
+                        val id = idRegex.find(attrs)?.groupValues?.get(1) ?: ""
+                        val href = hrefRegex.find(attrs)?.groupValues?.get(1) ?: ""
+                        val mediaType = mediaTypeRegex.find(attrs)?.groupValues?.get(1) ?: ""
+                        if (id.isNotEmpty() && href.isNotEmpty()) {
+                            manifestItems[id] = ManifestItem(id, href, mediaType)
+                        }
+                    }
+                    
+                    // Parse spine items using Regex
+                    val itemrefRegex = Regex("<itemref\\s+([^>]*)\\s*/?>", RegexOption.IGNORE_CASE)
+                    val idrefRegex = Regex("idref\\s*=\\s*['\"]([^'\"]+)['\"]", RegexOption.IGNORE_CASE)
+                    itemrefRegex.findAll(opfText).forEach { match ->
+                        val attrs = match.groupValues[1]
+                        val idref = idrefRegex.find(attrs)?.groupValues?.get(1) ?: ""
+                        if (idref.isNotEmpty()) {
+                            spineItems.add(idref)
+                        }
+                    }
+
+                    // Parse metadata tags
+                    val titleRegex = Regex("<dc:title(?:[^>]*)?>(.*?)</dc:title>", RegexOption.IGNORE_CASE)
+                    extractedTitle = titleRegex.find(opfText)?.groupValues?.get(1) ?: extractedTitle
+
+                    val creatorRegex = Regex("<dc:creator(?:[^>]*)?>(.*?)</dc:creator>", RegexOption.IGNORE_CASE)
+                    extractedAuthor = creatorRegex.find(opfText)?.groupValues?.get(1) ?: extractedAuthor
+
+                    val descRegex = Regex("<dc:description(?:[^>]*)?>(.*?)</dc:description>", RegexOption.IGNORE_CASE)
+                    extractedDesc = descRegex.find(opfText)?.groupValues?.get(1) ?: extractedDesc
+                } catch (ex: Exception) {
+                    Log.e(TAG, "Regex fallback for content.opf, fatal error", ex)
+                }
             }
         }
 
@@ -284,7 +327,50 @@ object EpubProcessor {
                 }
                 ncxNavPoints.sortBy { it.playOrder }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed DOM parsing toc.ncx", e)
+                Log.e(TAG, "Failed DOM parsing toc.ncx, falling back to Regex parsing", e)
+                try {
+                    val ncxText = ncxFileResolved.readText(Charsets.UTF_8)
+                    val navPointBlockRegex = Regex("<navPoint[^>]*>(.*?)</navPoint>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                    val playOrderRegex = Regex("playOrder\\s*=\\s*['\"](\\d+)['\"]", RegexOption.IGNORE_CASE)
+                    val textRegex = Regex("<text[^>]*>(.*?)</text>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                    val contentSrcRegex = Regex("<content\\s+[^>]*src\\s*=\\s*['\"]([^'\"]+)['\"]", RegexOption.IGNORE_CASE)
+                    
+                    var orderCounter = 0
+                    navPointBlockRegex.findAll(ncxText).forEach { blockMatch ->
+                        val blockInner = blockMatch.groupValues[1]
+                        val fullTag = blockMatch.value
+                        
+                        val playOrderStr = playOrderRegex.find(fullTag)?.groupValues?.get(1)
+                        val playOrder = playOrderStr?.toIntOrNull() ?: orderCounter++
+                        
+                        val textMatch = textRegex.find(blockInner)
+                        var title = textMatch?.groupValues?.get(1) ?: "Untitled Chapter"
+                        title = stripHtmlTags(title).trim()
+                        if (title.isBlank()) {
+                            title = "Chapter ${orderCounter}"
+                        }
+                        
+                        val srcMatch = contentSrcRegex.find(blockInner)
+                        val srcAttr = srcMatch?.groupValues?.get(1)
+                        
+                        if (srcAttr != null && srcAttr.isNotEmpty()) {
+                            val cleanSrcAttr = srcAttr
+                                .replace("&amp;", "&")
+                                .replace("&quot;", "\"")
+                                .replace("&lt;", "<")
+                                .replace("&gt;", ">")
+
+                            val hashIdx = cleanSrcAttr.indexOf('#')
+                            val fileHref = if (hashIdx != -1) cleanSrcAttr.substring(0, hashIdx) else cleanSrcAttr
+                            val anchor = if (hashIdx != -1) cleanSrcAttr.substring(hashIdx + 1) else null
+
+                            ncxNavPoints.add(NcxNavPoint(title, cleanSrcAttr, fileHref, anchor, playOrder))
+                        }
+                    }
+                    ncxNavPoints.sortBy { it.playOrder }
+                } catch (ex: Exception) {
+                    Log.e(TAG, "Regex fallback for toc.ncx failed", ex)
+                }
             }
         }
 
@@ -703,15 +789,10 @@ object EpubProcessor {
     ): File? {
         val sanitizedFileName = if (fileName.endsWith(".epub", ignoreCase = true)) fileName else "$fileName.epub"
         
-        // Define destination file inside the public Downloads directory
-        val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        if (!downloadDir.exists()) {
-            downloadDir.mkdirs()
-        }
-        val outputFile = File(downloadDir, sanitizedFileName)
+        val tempOutputFile = File(context.cacheDir, "temp_export_${System.currentTimeMillis()}_$sanitizedFileName")
 
         try {
-            val fos = FileOutputStream(outputFile)
+            val fos = FileOutputStream(tempOutputFile)
             val zos = ZipOutputStream(BufferedOutputStream(fos))
 
             // 1. mimetype (Must be FIRST and STORED uncompressed)
@@ -966,11 +1047,97 @@ object EpubProcessor {
             zos.flush()
             zos.close()
             fos.close()
-            return outputFile
+            
+            val savedFile = saveFileToPublicDownloads(context, tempOutputFile, sanitizedFileName)
+            try {
+                if (tempOutputFile.exists()) {
+                    tempOutputFile.delete()
+                }
+            } catch (ignored: Exception) {}
+            return savedFile
         } catch (e: Exception) {
             Log.e(TAG, "Error generating EPUB bundle", e)
+            try {
+                if (tempOutputFile.exists()) {
+                    tempOutputFile.delete()
+                }
+            } catch (ignored: Exception) {}
             return null
         }
+    }
+
+    private fun saveFileToPublicDownloads(context: Context, sourceFile: File, displayName: String): File? {
+        val resolver = context.contentResolver
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            val contentValues = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+                put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/epub+zip")
+                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            }
+            val collectionUri = android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI
+            var uri: android.net.Uri? = null
+            try {
+                uri = resolver.insert(collectionUri, contentValues)
+                if (uri != null) {
+                    resolver.openOutputStream(uri)?.use { outStream ->
+                        sourceFile.inputStream().use { inStream ->
+                            inStream.copyTo(outStream)
+                        }
+                    }
+                    return File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), displayName)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error saving to Downloads via MediaStore, trying fallback", e)
+                if (uri != null) {
+                    try { resolver.delete(uri, null, null) } catch (ignored: Exception) {}
+                }
+            }
+        }
+        
+        try {
+            val publicDownloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            if (!publicDownloadDir.exists()) {
+                publicDownloadDir.mkdirs()
+            }
+            val destFile = File(publicDownloadDir, displayName)
+            sourceFile.inputStream().use { inSt ->
+                destFile.outputStream().use { outSt ->
+                    inSt.copyTo(outSt)
+                }
+            }
+            return destFile
+        } catch (e: Exception) {
+            Log.e(TAG, "Standard file copy to public Downloads failed", e)
+            try {
+                val appExternalDownloads = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                if (appExternalDownloads != null) {
+                    if (!appExternalDownloads.exists()) appExternalDownloads.mkdirs()
+                    val destFile = File(appExternalDownloads, displayName)
+                    sourceFile.inputStream().use { inSt ->
+                        destFile.outputStream().use { outSt ->
+                            inSt.copyTo(outSt)
+                        }
+                    }
+                    Log.i(TAG, "Saved instead to app-specific external downloads: ${destFile.absolutePath}")
+                    return destFile
+                }
+            } catch (ex: Exception) {
+                Log.e(TAG, "Failsafe app-specific external downloads copy failed", ex)
+            }
+            try {
+                val persistentFile = File(context.filesDir, displayName)
+                sourceFile.inputStream().use { inSt ->
+                    persistentFile.outputStream().use { outSt ->
+                        inSt.copyTo(outSt)
+                    }
+                }
+                Log.i(TAG, "Saved instead to internal files folder: ${persistentFile.absolutePath}")
+                return persistentFile
+            } catch (ex: Exception) {
+                Log.e(TAG, "Failsafe internal files copy failed", ex)
+            }
+        }
+        return null
     }
 
     /**
