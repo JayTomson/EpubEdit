@@ -223,7 +223,7 @@ object EpubProcessor {
             ncxFileResolved = foundNcx
         }
 
-        data class NcxNavPoint(val title: String, val src: String, val fileHref: String, val anchor: String?)
+        data class NcxNavPoint(val title: String, val src: String, val fileHref: String, val anchor: String?, val playOrder: Int)
         val ncxNavPoints = mutableListOf<NcxNavPoint>()
 
         if (ncxFileResolved != null && ncxFileResolved.exists()) {
@@ -252,6 +252,9 @@ object EpubProcessor {
                             title = "Untitled Chapter"
                         }
 
+                        val playOrderStr = node.getAttribute("playOrder")
+                        val playOrder = playOrderStr.toIntOrNull() ?: i
+
                         var srcAttr: String? = null
                         val contents = node.getElementsByTagName("content")
                         if (contents.length > 0) {
@@ -270,10 +273,11 @@ object EpubProcessor {
                             val fileHref = if (hashIdx != -1) cleanSrcAttr.substring(0, hashIdx) else cleanSrcAttr
                             val anchor = if (hashIdx != -1) cleanSrcAttr.substring(hashIdx + 1) else null
 
-                            ncxNavPoints.add(NcxNavPoint(title, cleanSrcAttr, fileHref, anchor))
+                            ncxNavPoints.add(NcxNavPoint(title, cleanSrcAttr, fileHref, anchor, playOrder))
                         }
                     }
                 }
+                ncxNavPoints.sortBy { it.playOrder }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed DOM parsing toc.ncx", e)
             }
@@ -510,18 +514,6 @@ object EpubProcessor {
                     if (normalized.length > 1 && !potentialTitles.contains(normalized)) {
                         potentialTitles.add(normalized)
                     }
-                }
-            }
-        }
-
-        // Add fallback to <title> tag if potentialTitles is empty or doesn't have good info
-        val titleRegex = Regex("<title[^>]*>(.*?)</title>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-        val titleMatch = titleRegex.find(cleanHtml)
-        if (titleMatch != null) {
-            val cleanedTitle = stripHtmlTags(titleMatch.groupValues[1]).trim().replace(Regex("\\s+"), " ")
-            if (cleanedTitle.isNotEmpty() && cleanedTitle.length < 150) {
-                if (!potentialTitles.contains(cleanedTitle)) {
-                    potentialTitles.add(cleanedTitle)
                 }
             }
         }
