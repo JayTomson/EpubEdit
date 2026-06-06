@@ -404,6 +404,7 @@ object BookConverter {
 
             manifestItems.append("<item id=\"$id\" href=\"$fileHref\" media-type=\"application/xhtml+xml\"/>\n")
             spineItems.append("<itemref idref=\"$id\"/>\n")
+            epub3NavList.append("<li><a href=\"$fileHref\">${escapeXml(pc.title)}</a></li>\n")
             ncxNavMap.append("""
                 <navPoint id="$id" playOrder="${i + 1}">
                     <navLabel>
@@ -414,20 +415,47 @@ object BookConverter {
             """.trimIndent() + "\n")
         }
 
+        // 4b. EPUB 3 nav.xhtml Navigation document
+        val navHref = "nav.xhtml"
+        zos.putNextEntry(ZipEntry("OEBPS/$navHref"))
+        val navXhtml = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <!DOCTYPE html>
+            <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+            <head>
+                <title>Navigation</title>
+                <meta charset="utf-8" />
+            </head>
+            <body>
+                <nav epub:type="toc" id="toc">
+                    <h1>${escapeXml(title)}</h1>
+                    <ol>
+                        $epub3NavList
+                    </ol>
+                </nav>
+            </body>
+            </html>
+        """.trimIndent()
+        zos.write(navXhtml.toByteArray(Charsets.UTF_8))
+        zos.closeEntry()
+
         // 5. content.opf
         zos.putNextEntry(ZipEntry("OEBPS/content.opf"))
         val opf = """
             <?xml version="1.0" encoding="UTF-8"?>
-            <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="2.0">
+            <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="3.0">
                 <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
                     <dc:title>$escapedTitle</dc:title>
-                    <dc:creator>$escapedAuthor</dc:creator>
+                    <dc:creator id="creator">$escapedAuthor</dc:creator>
+                    <meta refines="#creator" property="role" scheme="marc:relators">aut</meta>
                     <dc:description>$escapedDesc</dc:description>
                     <dc:language>ru</dc:language>
                     <dc:identifier id="bookid">$bookUuid</dc:identifier>
+                    <meta property="dcterms:modified">${java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'").apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }.format(java.util.Date())}</meta>
                     ${if (hasCover) "<meta name=\"cover\" content=\"cover-image\"/>" else ""}
                 </metadata>
                 <manifest>
+                    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
                     <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
                     $manifestItems
                 </manifest>

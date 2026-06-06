@@ -662,14 +662,22 @@ object EpubProcessor {
     }
 
     private fun cleanContentHtmlForExport(html: String): String {
-        val bodyRegex = Regex("<body[^>]*>(.*?)</body>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-        val bodyMatch = bodyRegex.find(html)
-        var cleaned = if (bodyMatch != null) bodyMatch.groupValues[1] else html
-        
+        var cleaned = html
+        val bodyStartIdx = cleaned.indexOf("<body", ignoreCase = true)
+        if (bodyStartIdx != -1) {
+            val bodyEndIdx = cleaned.indexOf(">", bodyStartIdx)
+            if (bodyEndIdx != -1) {
+                val endBodyIdx = cleaned.lastIndexOf("</body>", ignoreCase = true)
+                if (endBodyIdx > bodyEndIdx) {
+                    cleaned = cleaned.substring(bodyEndIdx + 1, endBodyIdx)
+                }
+            }
+        }
+
         cleaned = cleaned.replace(Regex("(?i)<\\?xml[^>]*>"), "")
         cleaned = cleaned.replace(Regex("(?i)<!DOCTYPE[^>]*>"), "")
-        cleaned = cleaned.replace(Regex("(?i)<html[^>]*>"), "").replace(Regex("(?i)</html>"), "")
-        cleaned = cleaned.replace(Regex("(?i)<head[^>]*>.*?</head>", RegexOption.DOT_MATCHES_ALL), "")
+        cleaned = cleaned.replace(Regex("(?i)</?html[^>]*>"), "")
+        cleaned = cleaned.replace(Regex("(?i)<head[^>]*>[\\s\\S]*?</head>"), "")
         
         return cleaned.trim()
     }
@@ -791,6 +799,7 @@ object EpubProcessor {
             val escapedAuthor = escapeXml(author)
             val escapedDesc = escapeXml(description)
 
+            val navList = StringBuilder()
             // Loop and add chapters
             chapters.forEachIndexed { idx, chap ->
                 val chapId = "chapter_$idx"
@@ -851,6 +860,7 @@ object EpubProcessor {
 
                 manifestItems.append("<item id=\"$chapId\" href=\"$href\" media-type=\"application/xhtml+xml\"/>\n")
                 spineItems.append("<itemref idref=\"$chapId\"/>\n")
+                navList.append("<li><a href=\"$href\">${escapeXml(chap.title)}</a></li>\n")
                 ncxNavMap.append("""
                     <navPoint id="$chapId" playOrder="${idx + 1}">
                         <navLabel>
@@ -861,20 +871,46 @@ object EpubProcessor {
                 """.trimIndent() + "\n")
             }
 
+            // 3b. EPUB 3 nav.xhtml Navigation document
+            val navHref = "nav.xhtml"
+            zos.putNextEntry(ZipEntry("OEBPS/$navHref"))
+            val navXhtmlContent = """
+                <?xml version="1.0" encoding="utf-8"?>
+                <!DOCTYPE html>
+                <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+                <head>
+                    <title>Navigation</title>
+                    <meta charset="utf-8" />
+                </head>
+                <body>
+                    <nav epub:type="toc" id="toc">
+                        <h1>${escapeXml(title)}</h1>
+                        <ol>
+                            $navList
+                        </ol>
+                    </nav>
+                </body>
+                </html>
+            """.trimIndent()
+            zos.write(navXhtmlContent.toByteArray(Charsets.UTF_8))
+            zos.closeEntry()
+
             // 4. content.opf
             zos.putNextEntry(ZipEntry("OEBPS/content.opf"))
             val opfContent = """
                 <?xml version="1.0" encoding="UTF-8"?>
-                <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="2.0">
+                <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="3.0">
                     <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
                         <dc:title>$escapedTitle</dc:title>
-                        <dc:creator>$escapedAuthor</dc:creator>
+                        <dc:creator id="creator">$escapedAuthor</dc:creator>
                         <dc:description>$escapedDesc</dc:description>
                         <dc:language>ru</dc:language>
                         <dc:identifier id="bookid">$bookUuid</dc:identifier>
+                        <meta property="dcterms:modified">${java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'").apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }.format(java.util.Date())}</meta>
                         ${if (hasCover) "<meta name=\"cover\" content=\"cover-image\"/>" else ""}
                     </metadata>
                     <manifest>
+                        <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
                         <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
                         $manifestItems
                     </manifest>
