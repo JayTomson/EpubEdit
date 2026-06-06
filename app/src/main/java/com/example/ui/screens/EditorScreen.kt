@@ -605,6 +605,33 @@ fun EditorScreen(
                                                     Button(
                                                         onClick = {
                                                             editorBlocks.removeAt(index)
+                                                            
+                                                            // Post-deletion: merge adjacent ContentBlock.Text items
+                                                            val mergedList = mutableListOf<ContentBlock>()
+                                                            for (b in editorBlocks) {
+                                                                if (mergedList.isNotEmpty() && mergedList.last() is ContentBlock.Text && b is ContentBlock.Text) {
+                                                                    val lastText = (mergedList.last() as ContentBlock.Text).htmlText
+                                                                    val currentText = b.htmlText
+                                                                    val combined = if (lastText.trim().isEmpty()) {
+                                                                        currentText
+                                                                    } else if (currentText.trim().isEmpty()) {
+                                                                        lastText
+                                                                    } else {
+                                                                        "$lastText\n$currentText"
+                                                                    }
+                                                                    mergedList[mergedList.lastIndex] = ContentBlock.Text(combined)
+                                                                } else {
+                                                                    mergedList.add(b)
+                                                                }
+                                                            }
+                                                            editorBlocks.clear()
+                                                            editorBlocks.addAll(mergedList)
+                                                            if (editorBlocks.isEmpty()) {
+                                                                editorBlocks.add(ContentBlock.Text(""))
+                                                            }
+
+                                                            activeBlockIndex = null
+                                                            activeTextFieldValue = TextFieldValue("")
                                                             showDeleteConfirmDialog = false
                                                             Toast.makeText(context, "Иллюстрация удалена!", Toast.LENGTH_SHORT).show()
                                                         },
