@@ -110,6 +110,7 @@ object EpubProcessor {
                 val dbFactory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
                 dbFactory.isNamespaceAware = false
                 val dBuilder = dbFactory.newDocumentBuilder()
+                dBuilder.setEntityResolver { _, _ -> org.xml.sax.InputSource(java.io.StringReader("")) }
                 val doc = dBuilder.parse(containerFile)
                 val rootfiles = doc.getElementsByTagName("rootfile")
                 if (rootfiles.length > 0) {
@@ -138,6 +139,7 @@ object EpubProcessor {
                 val dbFactory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
                 dbFactory.isNamespaceAware = true
                 val dBuilder = dbFactory.newDocumentBuilder()
+                dBuilder.setEntityResolver { _, _ -> org.xml.sax.InputSource(java.io.StringReader("")) }
                 val doc = dBuilder.parse(opfFile)
                 doc.documentElement.normalize()
 
@@ -233,6 +235,7 @@ object EpubProcessor {
                 val dbFactory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
                 dbFactory.isNamespaceAware = false
                 val dBuilder = dbFactory.newDocumentBuilder()
+                dBuilder.setEntityResolver { _, _ -> org.xml.sax.InputSource(java.io.StringReader("")) }
                 val doc = dBuilder.parse(ncxFileResolved)
                 doc.documentElement.normalize()
 
@@ -826,7 +829,7 @@ object EpubProcessor {
                 // Standard XHTML template for high readers compatibility
                 val xhtmlContent = """
                     <?xml version="1.0" encoding="utf-8"?>
-                    <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+                    <!DOCTYPE html>
                     <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
                     <head>
                         <title>${escapeXml(chap.title)}</title>
@@ -891,7 +894,7 @@ object EpubProcessor {
             zos.putNextEntry(ZipEntry("OEBPS/$navHref"))
             val navXhtmlContent = """
                 <?xml version="1.0" encoding="utf-8"?>
-                <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+                <!DOCTYPE html>
                 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
                 <head>
                     <title>Navigation</title>
@@ -930,7 +933,6 @@ object EpubProcessor {
                         $manifestItems
                     </manifest>
                     <spine toc="ncx">
-                        <itemref idref="nav" linear="no"/>
                         $spineItems
                     </spine>
                 </package>
