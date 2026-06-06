@@ -583,65 +583,93 @@ object EpubProcessor {
     data class ManifestItem(val id: String, val href: String, val mediaType: String?)
 
 
+    private fun isGoodCandidate(text: String): Boolean {
+        if (text.isEmpty() || text.length > 120 || text.length < 2) return false
+        val lower = text.lowercase()
+        if (lower.matches(Regex("[\\s\\p{Punct}\\d]+"))) return false
+        if (lower in setOf("untitled", "untitled chapter", "chapter", "glava", "глава", "navigation", "toc", "index", "cover", "annotation", "аннотация")) return false
+        return true
+    }
+
     private fun extractTitleFromHtml(html: String, filename: String): String {
-        // Remove comments for cleaner regex
-        val cleanHtml = html.replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
+        // Remove comments, head, scripts, styles for clean regex
+        var cleanHtml = html.replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
+            .replace(Regex("<head(?:\\s+[^>]*)?>.*?</head>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+            .replace(Regex("<style(?:\\s+[^>]*)?>.*?</style>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+            .replace(Regex("<script(?:\\s+[^>]*)?>.*?</script>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+
+        val potentialTitles = mutableListOf<String>()
 
         // 1. Check <title> tag inside <head> if it exists and is informative
         val headTitleRegex = Regex("<title(?:\\s+[^>]*)?>(.*?)</title>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-        val headTitleMatch = headTitleRegex.find(cleanHtml)
+        val headTitleMatch = headTitleRegex.find(html) // Search original to include head if not stripped before
         if (headTitleMatch != null) {
             val headTitle = stripHtmlTags(headTitleMatch.groupValues[1]).trim()
-            val lower = headTitle.lowercase()
-            val isUninformative = headTitle.isEmpty() ||
-                lower in setOf("untitled", "untitled chapter", "chapter", "glava", "глава", "navigation", "toc", "index") ||
-                lower.matches(Regex("\\d+")) ||
-                lower.matches(Regex("(chapter|chap|ch|sec|section|part|page|vol|volume|xhtml|html)[_\\-\\s]*\\d+"))
-            if (!isUninformative && headTitle.length < 150) {
-                return headTitle.replace(Regex("\\s+"), " ")
+            if (isGoodCandidate(headTitle)) {
+                potentialTitles.add(headTitle.replace(Regex("\\s+"), " "))
             }
         }
 
-        val tagRegex = Regex("<(h1|h2|h3|h4|p|div|span)(\\s+[^>]*)?>(.*?)</\\1>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-        val matches = tagRegex.findAll(cleanHtml)
-        val potentialTitles = mutableListOf<String>()
-        
-        for (match in matches) {
-            val tagName = match.groupValues[1].lowercase()
-            val attributes = match.groupValues[2] ?: ""
-            val content = match.groupValues[3]
-            
-            val isHeader = tagName in listOf("h1", "h2", "h3", "h4")
-            val hasTitleAttr = attributes.isNotEmpty() && (
-                attributes.contains("title", ignoreCase = true) ||
-                attributes.contains("chapter", ignoreCase = true) ||
-                attributes.contains("heading", ignoreCase = true) ||
-                attributes.contains("hdr", ignoreCase = true)
-            )
+        // 2. Try to find headers <h1> to <h6>
+        val headerRegex = Regex("<(h1|h2|h3|h4|h5|h6)(?:\\s+[^>]*)?>(.*?)</\\1>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+        for (match in headerRegex.findAll(cleanHtml)) {
+            val text = stripHtmlTags(match.groupValues[2]).trim()
+            if (isGoodCandidate(text)) {
+                potentialTitles.add(text)
+            }
+        }
 
-            val textContentClean = stripHtmlTags(content).trim()
-            val startsWithChapterKeyword = textContentClean.isNotEmpty() && (
-                textContentClean.lowercase().startsWith("глава") ||
-                textContentClean.lowercase().startsWith("chapter") ||
-                textContentClean.lowercase().startsWith("часть") ||
-                textContentClean.lowercase().startsWith("part") ||
-                textContentClean.lowercase().startsWith("пролог") ||
-                textContentClean.lowercase().startsWith("prologue") ||
-                textContentClean.lowercase().startsWith("эпилог") ||
-                textContentClean.lowercase().startsWith("epilogue") ||
-                textContentClean.lowercase().startsWith("интерлюдия") ||
-                textContentClean.lowercase().startsWith("interlude") ||
-                textContentClean.lowercase().startsWith("послесловие") ||
-                textContentClean.lowercase().startsWith("afterword")
+        // 3. Try to find any <p> or <div/span> with clear title attributes
+        val classAttrRegex = Regex("<(p|div|span)\\s+[^>]*(?:class|id)\\s*=\\s*['\"][^'\"]*(?:title|chapter|header|heading|subject|name|caption|h_)[^'\"]*['\"][^>]*>(.*?)</\\1>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+        for (match in classAttrRegex.findAll(cleanHtml)) {
+            val text = stripHtmlTags(match.groupValues[2]).trim()
+            if (isGoodCandidate(text)) {
+                potentialTitles.add(text)
+            }
+        }
+
+        // 4. Try <p> tags starting with standard Chapter keywords or just short bold tags
+        val pRegex = Regex("<p(?:\\s+[^>]*)?>(.*?)</p>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+        val pMatches = pRegex.findAll(cleanHtml).take(15).toList() // limit to first 15 paragraphs of the document
+        for (match in pMatches) {
+            val inner = match.groupValues[1]
+            val text = stripHtmlTags(inner).trim()
+            
+            val startsWithChapterKeyword = text.isNotEmpty() && (
+                text.lowercase().startsWith("глава") ||
+                text.lowercase().startsWith("chapter") ||
+                text.lowercase().startsWith("часть") ||
+                text.lowercase().startsWith("part") ||
+                text.lowercase().startsWith("пролог") ||
+                text.lowercase().startsWith("prologue") ||
+                text.lowercase().startsWith("эпилог") ||
+                text.lowercase().startsWith("epilogue") ||
+                text.lowercase().startsWith("интерлюдия") ||
+                text.lowercase().startsWith("interlude") ||
+                text.lowercase().startsWith("послесловие") ||
+                text.lowercase().startsWith("afterword")
             )
             
-            if (isHeader || hasTitleAttr || (startsWithChapterKeyword && textContentClean.length < 120)) {
-                val cleaned = if (startsWithChapterKeyword) textContentClean else stripHtmlTags(content).trim()
-                if (cleaned.isNotEmpty() && cleaned.length < 150) {
-                    val normalized = cleaned.replace(Regex("\\s+"), " ")
-                    if (normalized.length > 1 && !potentialTitles.contains(normalized)) {
-                        potentialTitles.add(normalized)
+            if (startsWithChapterKeyword && isGoodCandidate(text)) {
+                potentialTitles.add(text)
+            } else {
+                // Check if the entire paragraph is bold, meaning it's likely a subtitle/header
+                val boldRegex = Regex("^\\s*<(b|strong|h[1-6]|span)(?:\\s+[^>]*)?>(.*?)</\\1>\\s*$", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                if (boldRegex.matches(inner.trim())) {
+                    if (isGoodCandidate(text) && text.length in 3..60) {
+                        potentialTitles.add(text)
                     }
+                }
+            }
+        }
+
+        // 5. Fallback to any first couple of short paragraphs
+        if (potentialTitles.isEmpty()) {
+            for (match in pMatches) {
+                val text = stripHtmlTags(match.groupValues[1]).trim()
+                if (isGoodCandidate(text) && text.length in 3..60) {
+                    potentialTitles.add(text)
+                    break // use the first short paragraph found
                 }
             }
         }

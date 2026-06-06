@@ -200,17 +200,37 @@ object BookConverter {
                             val headingMatch = headingRegex.find(cleanContent)
                             if (headingMatch != null) {
                                 val extracted = headingMatch.groupValues[2].replace(Regex("<[^>]*>"), "").replace(Regex("&nbsp;"), " ").trim()
-                                if (extracted.length in 2..150 && extracted.lowercase() != lowerSecTitle) {
+                                if (extracted.length in 2..120 && extracted.lowercase() != lowerSecTitle && extracted.isNotEmpty() && !extracted.matches(Regex("[\\s\\p{Punct}\\d]+"))) {
                                     secTitle = extracted.replace(Regex("\\s+"), " ")
                                 }
                             } else {
-                                // Or find the first paragraph that might be a bold chapter title or subtitle
-                                val boldPRegex = Regex("<p(?:\\s+[^>]*)?>\\s*<(b|strong)(?:\\s+[^>]*)?>(.*?)</\\1>\\s*</p>", RegexOption.IGNORE_CASE)
-                                val boldPMatch = boldPRegex.find(cleanContent.take(1000))
-                                if (boldPMatch != null) {
-                                    val extracted = boldPMatch.groupValues[2].replace(Regex("<[^>]*>"), "").replace(Regex("&nbsp;"), " ").trim()
-                                    if (extracted.length in 2..150 && extracted.lowercase() != lowerSecTitle && !extracted.matches(Regex("\\d+"))) {
+                                // Find any <p> that has bold or title class attributes
+                                val pClassRegex = Regex("<p\\s+[^>]*(?:class|id)\\s*=\\s*['\"][^'\"]*(?:title|chapter|header|heading|subject|name|caption|h_)[^'\"]*['\"][^>]*>(.*?)</p>", RegexOption.IGNORE_CASE)
+                                val pClassMatch = pClassRegex.find(cleanContent)
+                                if (pClassMatch != null) {
+                                    val extracted = pClassMatch.groupValues[1].replace(Regex("<[^>]*>"), "").replace(Regex("&nbsp;"), " ").trim()
+                                    if (extracted.length in 2..120 && extracted.lowercase() != lowerSecTitle && extracted.isNotEmpty() && !extracted.matches(Regex("[\\s\\p{Punct}\\d]+"))) {
                                         secTitle = extracted.replace(Regex("\\s+"), " ")
+                                    }
+                                } else {
+                                    // Or find the first paragraph that might be a bold chapter title or subtitle
+                                    val boldPRegex = Regex("<p(?:\\s+[^>]*)?>\\s*<(b|strong)(?:\\s+[^>]*)?>(.*?)</\\1>\\s*</p>", RegexOption.IGNORE_CASE)
+                                    val boldPMatch = boldPRegex.find(cleanContent.take(1000))
+                                    if (boldPMatch != null) {
+                                        val extracted = boldPMatch.groupValues[2].replace(Regex("<[^>]*>"), "").replace(Regex("&nbsp;"), " ").trim()
+                                        if (extracted.length in 2..120 && extracted.lowercase() != lowerSecTitle && !extracted.matches(Regex("\\d+")) && extracted.isNotEmpty() && !extracted.matches(Regex("[\\s\\p{Punct}\\d]+"))) {
+                                            secTitle = extracted.replace(Regex("\\s+"), " ")
+                                        }
+                                    } else {
+                                        // Try any short first paragraph (<60 chars) that is not uninformative/numeric
+                                        val pRegex = Regex("<p(?:\\s+[^>]*)?>(.*?)</p>", RegexOption.IGNORE_CASE)
+                                        val firstP = pRegex.findAll(cleanContent).take(5).firstOrNull { pm ->
+                                            val text = pm.groupValues[1].replace(Regex("<[^>]*>"), "").replace(Regex("&nbsp;"), " ").trim()
+                                            text.length in 3..60 && !text.matches(Regex("[\\s\\p{Punct}\\d]+")) && text.lowercase() != lowerSecTitle
+                                        }
+                                        if (firstP != null) {
+                                            secTitle = firstP.groupValues[1].replace(Regex("<[^>]*>"), "").replace(Regex("&nbsp;"), " ").trim().replace(Regex("\\s+"), " ")
+                                        }
                                     }
                                 }
                             }
