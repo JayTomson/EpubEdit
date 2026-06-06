@@ -32,7 +32,7 @@ object EpubProcessor {
      * Parses an EPUB file from a given content Uri or file input stream.
      * Extracts info, chapters, and cover image.
      */
-    fun parseEpub(context: Context, uri: Uri): ParsedEpub? {
+    fun parseEpub(context: Context, uri: Uri, titleId: Long? = null): ParsedEpub? {
         val resolver = context.contentResolver
         val tempDir = File(context.cacheDir, "epub_unzipped_${System.currentTimeMillis()}")
         tempDir.mkdirs()
@@ -87,7 +87,8 @@ object EpubProcessor {
 
         val imageMap = mutableMapOf<String, String>() // filename -> persistent absolute path
         imageFiles.forEach { file ->
-            val destFile = File(mediaDir, "media_${System.currentTimeMillis()}_${file.name}")
+            val prefix = if (titleId != null) "book_${titleId}_" else "media_${System.currentTimeMillis()}_"
+            val destFile = File(mediaDir, "$prefix${file.name}")
             try {
                 file.copyTo(destFile, overwrite = true)
                 imageMap[file.name.lowercase()] = destFile.absolutePath
@@ -603,7 +604,8 @@ object EpubProcessor {
         author: String,
         description: String,
         coverImagePath: String?,
-        chapters: List<ParsedChapter>
+        chapters: List<ParsedChapter>,
+        titleId: Long? = null
     ): File? {
         val sanitizedFileName = if (fileName.endsWith(".epub", ignoreCase = true)) fileName else "$fileName.epub"
         
@@ -678,7 +680,7 @@ object EpubProcessor {
             }
 
             referencedImages.forEach { src ->
-                val resolvedPath = resolveLocalImagePath(context, src)
+                val resolvedPath = resolveLocalImagePath(context, src, titleId)
                 if (resolvedPath != null) {
                     val imgFile = File(resolvedPath)
                     if (imgFile.exists()) {
@@ -712,10 +714,16 @@ object EpubProcessor {
                 
                 // Smart Title check to avoid visual repetition in advanced readers
                 val containsTitleHeader = chap.contentHtml.trim().let { trimmed ->
+                    val cleanText = stripHtmlTags(trimmed)
+                        .replace("[^a-zA-Z0-9а-яА-Я]".toRegex(), "")
+                        .lowercase()
+                    val cleanTitle = chap.title
+                        .replace("[^a-zA-Z0-9а-яА-Я]".toRegex(), "")
+                        .lowercase()
                     trimmed.startsWith("<h1", ignoreCase = true) ||
                     trimmed.startsWith("<h2", ignoreCase = true) ||
                     trimmed.startsWith("<h3", ignoreCase = true) ||
-                    stripHtmlTags(trimmed).take(150).contains(chap.title, ignoreCase = true)
+                    (cleanTitle.isNotEmpty() && cleanText.take(300).contains(cleanTitle))
                 }
                 val headerTag = if (containsTitleHeader) "" else "<h1>${chap.title}</h1>\n"
 
@@ -810,7 +818,7 @@ object EpubProcessor {
     /**
      * Attempts to resolve an image's src attribute to its cached local file path.
      */
-    fun resolveLocalImagePath(context: Context, src: String): String? {
+    fun resolveLocalImagePath(context: Context, src: String, titleId: Long? = null): String? {
         val decodedSrc = try {
             java.net.URLDecoder.decode(src, "UTF-8")
         } catch (e: Exception) {
@@ -819,6 +827,18 @@ object EpubProcessor {
         val filename = File(decodedSrc.lowercase()).name
         val mediaDir = File(context.filesDir, "epub_media")
         if (mediaDir.exists()) {
+            if (titleId != null) {
+                val bookPrefix = "book_${titleId}_"
+                val matches = mediaDir.listFiles { _, name ->
+                    val lowerName = name.lowercase()
+                    lowerName.startsWith(bookPrefix.lowercase()) && 
+                    (lowerName.endsWith("_$filename") || lowerName == "$bookPrefix$filename" || lowerName.endsWith("_" + filename.replace(bookPrefix, "")))
+                }
+                if (!matches.isNullOrEmpty()) {
+                    return matches.first().absolutePath
+                }
+            }
+            // Fallback
             val matches = mediaDir.listFiles { _, name ->
                 val lowerName = name.lowercase()
                 lowerName.endsWith("_$filename") || lowerName == filename
@@ -833,7 +853,7 @@ object EpubProcessor {
     /**
      * Parses the HTML content of a chapter into sequential Text and Image blocks.
      */
-    fun parseContentIntoBlocks(context: Context, html: String): List<ContentBlock> {
+    fun parseContentIntoBlocks(context: Context, html: String, titleId: Long? = null): List<ContentBlock> {
         val blocks = mutableListOf<ContentBlock>()
         
         // Match both HTML img tag and SVG XML image tags
@@ -864,7 +884,7 @@ object EpubProcessor {
                 }
             }
             
-            val resolvedPath = resolveLocalImagePath(context, img.src)
+            val resolvedPath = resolveLocalImagePath(context, img.src, titleId)
             if (resolvedPath != null) {
                 blocks.add(ContentBlock.Image(resolvedPath))
             } else {

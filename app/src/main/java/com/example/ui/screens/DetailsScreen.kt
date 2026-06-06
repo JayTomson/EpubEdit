@@ -935,7 +935,7 @@ fun ChaptersTabContent(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     val contentBlocks = remember(chapter.contentHtml) {
-                        EpubProcessor.parseContentIntoBlocks(context, chapter.contentHtml)
+                        EpubProcessor.parseContentIntoBlocks(context, chapter.contentHtml, chapter.titleId)
                     }
 
                     // Chapter content rendering with support for multiple inline illustrations

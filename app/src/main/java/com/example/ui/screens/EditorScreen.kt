@@ -76,7 +76,7 @@ fun EditorScreen(
 
     // Visual Rich block list of sequential text and image nodes
     val editorBlocks = remember(currentChapter) {
-        val parsed = EpubProcessor.parseContentIntoBlocks(context, currentChapter.contentHtml).toMutableStateList()
+        val parsed = EpubProcessor.parseContentIntoBlocks(context, currentChapter.contentHtml, currentChapter.titleId).toMutableStateList()
         if (parsed.isEmpty()) {
             parsed.add(ContentBlock.Text(""))
         }
@@ -383,7 +383,7 @@ fun EditorScreen(
                                 if (isHtmlMode) {
                                     // Turning off HTML Mode: parse contentHtml into editorBlocks
                                     editorBlocks.clear()
-                                    editorBlocks.addAll(EpubProcessor.parseContentIntoBlocks(context, contentHtml))
+                                    editorBlocks.addAll(EpubProcessor.parseContentIntoBlocks(context, contentHtml, currentChapter.titleId))
                                     if (editorBlocks.isEmpty()) {
                                         editorBlocks.add(ContentBlock.Text(""))
                                     }

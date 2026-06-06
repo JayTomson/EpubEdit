@@ -370,10 +370,16 @@ object BookConverter {
             zos.putNextEntry(ZipEntry("OEBPS/$fileHref"))
 
             val containsTitleHeader = pc.contentHtml.trim().let { trimmed ->
+                val cleanText = pc.contentHtml.replace(Regex("<[^>]*>"), "")
+                    .replace("[^a-zA-Z0-9а-яА-Я]".toRegex(), "")
+                    .lowercase()
+                val cleanTitle = pc.title
+                    .replace("[^a-zA-Z0-9а-яА-Я]".toRegex(), "")
+                    .lowercase()
                 trimmed.startsWith("<h1", ignoreCase = true) ||
                 trimmed.startsWith("<h2", ignoreCase = true) ||
                 trimmed.startsWith("<h3", ignoreCase = true) ||
-                trimmed.replace(Regex("<[^>]*>"), "").take(150).contains(pc.title, ignoreCase = true)
+                (cleanTitle.isNotEmpty() && cleanText.take(300).contains(cleanTitle))
             }
             val headerTag = if (containsTitleHeader) "" else "<h1>${pc.title}</h1>\n"
 

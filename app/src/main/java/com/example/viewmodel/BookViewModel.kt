@@ -125,7 +125,7 @@ class BookViewModel(private val repository: BookRepository) : ViewModel() {
     fun importEpub(context: Context, titleId: Long, uri: Uri, fileName: String, fileSize: Long) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val parsed = EpubProcessor.parseEpub(context, uri) ?: return@launch
+                val parsed = EpubProcessor.parseEpub(context, uri, titleId) ?: return@launch
                 
                 // Add SourceFile record
                 val nextFileIndex = repository.getSourceFilesForTitleOneShot(titleId).size
@@ -187,7 +187,7 @@ class BookViewModel(private val repository: BookRepository) : ViewModel() {
                     val fileLength = tempEpubFile.length()
                     val convertedUri = Uri.fromFile(tempEpubFile)
                     
-                    val parsed = EpubProcessor.parseEpub(context, convertedUri)
+                    val parsed = EpubProcessor.parseEpub(context, convertedUri, titleId)
                     if (parsed != null) {
                         val nextFileIndex = repository.getSourceFilesForTitleOneShot(titleId).size
                         val sfId = repository.insertSourceFile(
@@ -342,7 +342,8 @@ class BookViewModel(private val repository: BookRepository) : ViewModel() {
                     author = title.author ?: "Автор",
                     description = title.description ?: "",
                     coverImagePath = title.coverImage,
-                    chapters = plist
+                    chapters = plist,
+                    titleId = titleId
                 )
                 withContext(Dispatchers.Main) {
                     onFinished(result)
