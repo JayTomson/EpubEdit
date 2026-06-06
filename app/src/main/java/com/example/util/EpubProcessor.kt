@@ -888,7 +888,12 @@ object EpubProcessor {
     /**
      * Parses the HTML content of a chapter into sequential Text and Image blocks.
      */
-    fun parseContentIntoBlocks(context: Context, html: String, titleId: Long? = null): List<ContentBlock> {
+    fun parseContentIntoBlocks(
+        context: Context, 
+        html: String, 
+        titleId: Long? = null, 
+        chapterTitle: String? = null
+    ): List<ContentBlock> {
         val blocks = mutableListOf<ContentBlock>()
         
         // Match both HTML img tag and SVG XML image tags
@@ -936,7 +941,93 @@ object EpubProcessor {
             }
         }
         
-        return blocks
+        return if (chapterTitle != null) {
+            cleanBlocksFromChapterTitle(blocks, chapterTitle)
+        } else {
+            blocks
+        }
+    }
+
+    private fun cleanBlocksFromChapterTitle(blocks: List<ContentBlock>, title: String): List<ContentBlock> {
+        if (title.isBlank()) return blocks
+        
+        val cleanTitle = title.lowercase()
+            .replace(Regex("[^\\p{L}\\p{N}]"), "")
+        if (cleanTitle.isEmpty()) return blocks
+
+        val cleanedList = mutableListOf<ContentBlock>()
+        var prefixCheckDone = false
+
+        for (block in blocks) {
+            if (block is ContentBlock.Text) {
+                val html = block.htmlText
+                val plain = stripHtmlTags(html).trim()
+                val cleanPlain = plain.lowercase().replace(Regex("[^\\p{L}\\p{N}]"), "")
+
+                if (cleanPlain.isEmpty()) {
+                    continue
+                }
+
+                // Case A: Entire block is identical or close matching structure to the title
+                if (cleanPlain == cleanTitle || 
+                    (cleanPlain.length > 3 && cleanTitle.contains(cleanPlain)) ||
+                    (cleanTitle.length > 3 && cleanPlain.contains(cleanTitle) && cleanPlain.length - cleanTitle.length < 5)) {
+                    continue
+                }
+
+                // Case B: Block begins with the title as a header prefix
+                if (!prefixCheckDone && cleanPlain.startsWith(cleanTitle)) {
+                    prefixCheckDone = true
+                    
+                    val lowerPlain = plain.lowercase()
+                    val lowerTitle = title.lowercase()
+                    val idx = lowerPlain.indexOf(lowerTitle)
+                    if (idx != -1) {
+                        val remainingText = plain.substring(idx + title.length).trim()
+                        if (remainingText.isNotEmpty()) {
+                            cleanedList.add(ContentBlock.Text("<p>$remainingText</p>"))
+                        }
+                        continue
+                    } else {
+                        // Soft char map comparison
+                        var matchCharCount = 0
+                        var textIndex = 0
+                        var titleIndex = 0
+                        while (textIndex < plain.length && titleIndex < title.length) {
+                            val tc = plain[textIndex].lowercaseChar()
+                            val tt = title[titleIndex].lowercaseChar()
+                            
+                            if (!tc.isLetterOrDigit()) {
+                                textIndex++
+                                continue
+                            }
+                            if (!tt.isLetterOrDigit()) {
+                                titleIndex++
+                                continue
+                            }
+                            
+                            if (tc == tt) {
+                                textIndex++
+                                titleIndex++
+                                matchCharCount++
+                            } else {
+                                break
+                            }
+                        }
+                        
+                        if (matchCharCount > 0 && titleIndex >= title.length * 0.8) {
+                            val remainingText = plain.substring(textIndex).trim()
+                            if (remainingText.isNotEmpty()) {
+                                cleanedList.add(ContentBlock.Text("<p>$remainingText</p>"))
+                            }
+                            continue
+                        }
+                    }
+                }
+            }
+            cleanedList.add(block)
+        }
+        return cleanedList
     }
 }
 
