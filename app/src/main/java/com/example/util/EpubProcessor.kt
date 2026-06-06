@@ -582,6 +582,47 @@ object EpubProcessor {
             .trim()
     }
 
+    private fun escapeXml(text: String): String {
+        return text.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
+            .replace("'", "&apos;")
+    }
+
+    private fun containsAnyTitleRepresentation(contentHtml: String, chapterTitle: String): Boolean {
+        val cleanText = contentHtml.replace(Regex("<[^>]*>"), "")
+            .lowercase()
+            .replace(Regex("[^\\p{L}\\p{N}]"), "")
+        
+        val cleanTitle = chapterTitle.lowercase()
+            .replace(Regex("[^\\p{L}\\p{N}]"), "")
+            
+        if (cleanTitle.isEmpty() || cleanText.isEmpty()) return false
+        
+        // 1. Direct contains check of normalized strings
+        if (cleanText.take(400).contains(cleanTitle)) return true
+        if (cleanTitle.contains(cleanText.take(20))) return true
+        
+        // 2. Word-by-word intersection check (e.g. "Глава 1. Пролог" vs "Пролог")
+        val titleWords = chapterTitle.lowercase()
+            .split(Regex("[^\\p{L}\\p{N}]+"))
+            .filter { it.length > 2 && it != "глава" && it != "chapter" }
+            
+        if (titleWords.isNotEmpty()) {
+            val first100Words = contentHtml.replace(Regex("<[^>]*>"), " ")
+                .lowercase()
+                .split(Regex("[^\\p{L}\\p{N}]+"))
+                .take(100)
+                
+            for (w in titleWords) {
+                if (first100Words.contains(w)) return true
+            }
+        }
+        
+        return false
+    }
+
     private fun getFileNameFromUri(context: Context, uri: Uri): String? {
         var name: String? = null
         context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
@@ -705,6 +746,11 @@ object EpubProcessor {
                 }
             }
 
+            val bookUuid = "urn:uuid:${java.util.UUID.randomUUID()}"
+            val escapedTitle = escapeXml(title)
+            val escapedAuthor = escapeXml(author)
+            val escapedDesc = escapeXml(description)
+
             // Loop and add chapters
             chapters.forEachIndexed { idx, chap ->
                 val chapId = "chapter_$idx"
@@ -713,19 +759,8 @@ object EpubProcessor {
                 zos.putNextEntry(ZipEntry("OEBPS/$href"))
                 
                 // Smart Title check to avoid visual repetition in advanced readers
-                val containsTitleHeader = chap.contentHtml.trim().let { trimmed ->
-                    val cleanText = stripHtmlTags(trimmed)
-                        .replace("[^a-zA-Z0-9а-яА-Я]".toRegex(), "")
-                        .lowercase()
-                    val cleanTitle = chap.title
-                        .replace("[^a-zA-Z0-9а-яА-Я]".toRegex(), "")
-                        .lowercase()
-                    trimmed.startsWith("<h1", ignoreCase = true) ||
-                    trimmed.startsWith("<h2", ignoreCase = true) ||
-                    trimmed.startsWith("<h3", ignoreCase = true) ||
-                    (cleanTitle.isNotEmpty() && cleanText.take(300).contains(cleanTitle))
-                }
-                val headerTag = if (containsTitleHeader) "" else "<h1>${chap.title}</h1>\n"
+                val containsTitleHeader = containsAnyTitleRepresentation(chap.contentHtml, chap.title)
+                val headerTag = if (containsTitleHeader) "" else "<h1>${escapeXml(chap.title)}</h1>\n"
 
                 // Standard XHTML template for high readers compatibility
                 val xhtmlContent = """
@@ -733,7 +768,7 @@ object EpubProcessor {
                     <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
                     <html xmlns="http://www.w3.org/1999/xhtml">
                     <head>
-                        <title>${chap.title}</title>
+                        <title>${escapeXml(chap.title)}</title>
                         <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
                     </head>
                     <body>
@@ -750,7 +785,7 @@ object EpubProcessor {
                 ncxNavMap.append("""
                     <navPoint id="$chapId" playOrder="${idx + 1}">
                         <navLabel>
-                            <text>${chap.title}</text>
+                            <text>${escapeXml(chap.title)}</text>
                         </navLabel>
                         <content src="$href"/>
                     </navPoint>
@@ -763,11 +798,11 @@ object EpubProcessor {
                 <?xml version="1.0" encoding="UTF-8"?>
                 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="2.0">
                     <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
-                        <dc:title>$title</dc:title>
-                        <dc:creator>$author</dc:creator>
-                        <dc:description>$description</dc:description>
+                        <dc:title>$escapedTitle</dc:title>
+                        <dc:creator>$escapedAuthor</dc:creator>
+                        <dc:description>$escapedDesc</dc:description>
                         <dc:language>ru</dc:language>
-                        <dc:identifier id="bookid">urn:uuid:${java.util.UUID.randomUUID()}</dc:identifier>
+                        <dc:identifier id="bookid">$bookUuid</dc:identifier>
                         ${if (hasCover) "<meta name=\"cover\" content=\"cover-image\"/>" else ""}
                     </metadata>
                     <manifest>
@@ -789,13 +824,13 @@ object EpubProcessor {
                 <!DOCTYPE ncx PUBLIC "-//NISO//DTD NCX 2005-1//EN" "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd">
                 <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
                     <head>
-                        <meta name="dtb:uid" content="urn:uuid:0"/>
+                        <meta name="dtb:uid" content="$bookUuid"/>
                         <meta name="dtb:depth" content="1"/>
                         <meta name="dtb:totalPageCount" content="0"/>
                         <meta name="dtb:maxPageNumber" content="0"/>
                     </head>
                     <docTitle>
-                        <text>$title</text>
+                        <text>$escapedTitle</text>
                     </docTitle>
                     <navMap>
                         $ncxNavMap
