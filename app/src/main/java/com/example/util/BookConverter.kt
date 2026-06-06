@@ -372,19 +372,26 @@ object BookConverter {
         val epub3NavList = StringBuilder()
         chapters.forEachIndexed { i, pc ->
             val id = "chapter_$i"
-            val fileHref = "chapter_$i.xhtml"
+            val paddedIdx = i.toString().padStart(4, '0')
+            val fileHref = "chapter_$paddedIdx.xhtml"
             zos.putNextEntry(ZipEntry("OEBPS/$fileHref"))
 
             val containsTitleHeader = containsAnyTitleRepresentation(pc.contentHtml, pc.title)
-            val headerTag = if (containsTitleHeader) "" else "<h1>${escapeXml(pc.title)}</h1>\n"
+            val headerTag = if (containsTitleHeader) "" else "<h2 class=\"chapter-header\">${escapeXml(pc.title)}</h2>\n"
 
             val xhtml = """
                 <?xml version="1.0" encoding="utf-8"?>
-                <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
-                <html xmlns="http://www.w3.org/1999/xhtml">
+                <!DOCTYPE html>
+                <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
                 <head>
                     <title>${escapeXml(pc.title)}</title>
-                    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+                    <meta charset="utf-8" />
+                    <style type="text/css">
+                        body { font-family: sans-serif; line-height: 1.6; padding: 2%; margin: 0; }
+                        p { text-indent: 1.5em; margin-top: 0.2em; margin-bottom: 0.2em; text-align: justify; }
+                        .chapter-header { text-align: center; font-size: 1.5em; font-weight: bold; margin-bottom: 1.5em; margin-top: 1em; }
+                        img { max-width: 100%; height: auto; display: block; margin: 1em auto; }
+                    </style>
                 </head>
                 <body>
                     $headerTag${pc.contentHtml}
@@ -397,7 +404,6 @@ object BookConverter {
 
             manifestItems.append("<item id=\"$id\" href=\"$fileHref\" media-type=\"application/xhtml+xml\"/>\n")
             spineItems.append("<itemref idref=\"$id\"/>\n")
-            epub3NavList.append("<li><a href=\"$fileHref\">${escapeXml(pc.title)}</a></li>\n")
             ncxNavMap.append("""
                 <navPoint id="$id" playOrder="${i + 1}">
                     <navLabel>
@@ -408,48 +414,21 @@ object BookConverter {
             """.trimIndent() + "\n")
         }
 
-        // 4b. EPUB 3 nav.xhtml Navigation document
-        val navHref = "nav.xhtml"
-        zos.putNextEntry(ZipEntry("OEBPS/$navHref"))
-        val navXhtml = """
-            <?xml version="1.0" encoding="utf-8"?>
-            <!DOCTYPE html>
-            <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
-            <head>
-                <title>Navigation</title>
-                <meta charset="utf-8" />
-            </head>
-            <body>
-                <nav epub:type="toc" id="toc">
-                    <h1>${escapeXml(title)}</h1>
-                    <ol>
-                        $epub3NavList
-                    </ol>
-                </nav>
-            </body>
-            </html>
-        """.trimIndent()
-        zos.write(navXhtml.toByteArray(Charsets.UTF_8))
-        zos.closeEntry()
-
         // 5. content.opf
         zos.putNextEntry(ZipEntry("OEBPS/content.opf"))
         val opf = """
             <?xml version="1.0" encoding="UTF-8"?>
-            <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="3.0">
+            <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="2.0">
                 <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
                     <dc:title>$escapedTitle</dc:title>
-                    <dc:creator id="creator">$escapedAuthor</dc:creator>
-                    <meta refines="#creator" property="role" scheme="marc:relators">aut</meta>
+                    <dc:creator>$escapedAuthor</dc:creator>
                     <dc:description>$escapedDesc</dc:description>
                     <dc:language>ru</dc:language>
                     <dc:identifier id="bookid">$bookUuid</dc:identifier>
-                    <meta property="dcterms:modified">2026-06-06T20:54:00Z</meta>
                     ${if (hasCover) "<meta name=\"cover\" content=\"cover-image\"/>" else ""}
                 </metadata>
                 <manifest>
                     <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
-                    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
                     $manifestItems
                 </manifest>
                 <spine toc="ncx">

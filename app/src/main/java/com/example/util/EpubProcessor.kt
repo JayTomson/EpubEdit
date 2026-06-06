@@ -661,6 +661,19 @@ object EpubProcessor {
         return name ?: uri.lastPathSegment
     }
 
+    private fun cleanContentHtmlForExport(html: String): String {
+        val bodyRegex = Regex("<body[^>]*>(.*?)</body>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+        val bodyMatch = bodyRegex.find(html)
+        var cleaned = if (bodyMatch != null) bodyMatch.groupValues[1] else html
+        
+        cleaned = cleaned.replace(Regex("(?i)<\\?xml[^>]*>"), "")
+        cleaned = cleaned.replace(Regex("(?i)<!DOCTYPE[^>]*>"), "")
+        cleaned = cleaned.replace(Regex("(?i)<html[^>]*>"), "").replace(Regex("(?i)</html>"), "")
+        cleaned = cleaned.replace(Regex("(?i)<head[^>]*>.*?</head>", RegexOption.DOT_MATCHES_ALL), "")
+        
+        return cleaned.trim()
+    }
+
     /**
      * Packages a collection of chapters into a valid EPUB zip file and saves it
      * into the public Download directory.
@@ -779,28 +792,56 @@ object EpubProcessor {
             val escapedDesc = escapeXml(description)
 
             // Loop and add chapters
-            val epub3NavList = StringBuilder()
             chapters.forEachIndexed { idx, chap ->
                 val chapId = "chapter_$idx"
-                val href = "chapter_$idx.xhtml"
+                val paddedIdx = idx.toString().padStart(4, '0')
+                val href = "chapter_$paddedIdx.xhtml"
                 
                 zos.putNextEntry(ZipEntry("OEBPS/$href"))
                 
                 // Smart Title check to avoid visual repetition in advanced readers
-                val containsTitleHeader = containsAnyTitleRepresentation(chap.contentHtml, chap.title)
-                val headerTag = if (containsTitleHeader) "" else "<h1>${escapeXml(chap.title)}</h1>\n"
+                val cleanedHtml = cleanContentHtmlForExport(chap.contentHtml)
+                val containsTitleHeader = containsAnyTitleRepresentation(cleanedHtml, chap.title)
+                val headerTag = if (containsTitleHeader) "" else "<h2 class=\"chapter-header\">${escapeXml(chap.title)}</h2>\n"
 
                 // Standard XHTML template for high readers compatibility
                 val xhtmlContent = """
                     <?xml version="1.0" encoding="utf-8"?>
-                    <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
-                    <html xmlns="http://www.w3.org/1999/xhtml">
+                    <!DOCTYPE html>
+                    <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
                     <head>
                         <title>${escapeXml(chap.title)}</title>
-                        <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+                        <meta charset="utf-8" />
+                        <style type="text/css">
+                            body {
+                                font-family: sans-serif;
+                                line-height: 1.6;
+                                padding: 2%;
+                                margin: 0;
+                            }
+                            p {
+                                text-indent: 1.5em;
+                                margin-top: 0.2em;
+                                margin-bottom: 0.2em;
+                                text-align: justify;
+                            }
+                            .chapter-header {
+                                text-align: center;
+                                font-size: 1.5em;
+                                font-weight: bold;
+                                margin-bottom: 1.5em;
+                                margin-top: 1em;
+                            }
+                            img {
+                                max-width: 100%;
+                                height: auto;
+                                display: block;
+                                margin: 1em auto;
+                            }
+                        </style>
                     </head>
                     <body>
-                        $headerTag${chap.contentHtml}
+                        $headerTag${cleanedHtml}
                     </body>
                     </html>
                 """.trimIndent()
@@ -810,7 +851,6 @@ object EpubProcessor {
 
                 manifestItems.append("<item id=\"$chapId\" href=\"$href\" media-type=\"application/xhtml+xml\"/>\n")
                 spineItems.append("<itemref idref=\"$chapId\"/>\n")
-                epub3NavList.append("<li><a href=\"$href\">${escapeXml(chap.title)}</a></li>\n")
                 ncxNavMap.append("""
                     <navPoint id="$chapId" playOrder="${idx + 1}">
                         <navLabel>
@@ -821,48 +861,21 @@ object EpubProcessor {
                 """.trimIndent() + "\n")
             }
 
-            // 3b. EPUB 3 nav.xhtml Navigation document
-            val navHref = "nav.xhtml"
-            zos.putNextEntry(ZipEntry("OEBPS/$navHref"))
-            val navXhtmlContent = """
-                <?xml version="1.0" encoding="utf-8"?>
-                <!DOCTYPE html>
-                <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
-                <head>
-                    <title>Navigation</title>
-                    <meta charset="utf-8" />
-                </head>
-                <body>
-                    <nav epub:type="toc" id="toc">
-                        <h1>${escapeXml(title)}</h1>
-                        <ol>
-                            $epub3NavList
-                        </ol>
-                    </nav>
-                </body>
-                </html>
-            """.trimIndent()
-            zos.write(navXhtmlContent.toByteArray(Charsets.UTF_8))
-            zos.closeEntry()
-
             // 4. content.opf
             zos.putNextEntry(ZipEntry("OEBPS/content.opf"))
             val opfContent = """
                 <?xml version="1.0" encoding="UTF-8"?>
-                <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="3.0">
+                <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="2.0">
                     <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
                         <dc:title>$escapedTitle</dc:title>
-                        <dc:creator id="creator">$escapedAuthor</dc:creator>
-                        <meta refines="#creator" property="role" scheme="marc:relators">aut</meta>
+                        <dc:creator>$escapedAuthor</dc:creator>
                         <dc:description>$escapedDesc</dc:description>
                         <dc:language>ru</dc:language>
                         <dc:identifier id="bookid">$bookUuid</dc:identifier>
-                        <meta property="dcterms:modified">2026-06-06T20:54:00Z</meta>
                         ${if (hasCover) "<meta name=\"cover\" content=\"cover-image\"/>" else ""}
                     </metadata>
                     <manifest>
                         <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
-                        <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
                         $manifestItems
                     </manifest>
                     <spine toc="ncx">

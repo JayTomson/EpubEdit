@@ -324,9 +324,19 @@ class BookViewModel(private val repository: BookRepository) : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val title = repository.getTitleByIdOneShot(titleId) ?: return@launch
-                val chs = repository.getChaptersForTitleOneShot(titleId)
+                val allChs = repository.getChaptersForTitleOneShot(titleId)
+                val sourceFiles = repository.getSourceFilesForTitleOneShot(titleId).sortedBy { it.orderIndex }
                 
-                val plist = chs.map {
+                // Sort chapters first by their SourceFile's new order, then their own order
+                val sortedChs = mutableListOf<com.example.data.Chapter>()
+                sourceFiles.forEach { sf ->
+                    sortedChs.addAll(allChs.filter { it.sourceFileId == sf.id }.sortedBy { it.orderIndex })
+                }
+                // Append manual chapters (any chapter without a source file, or from a missing source file)
+                val manualChs = allChs.filter { ch -> ch.sourceFileId == null || sourceFiles.none { sf -> sf.id == ch.sourceFileId } }
+                sortedChs.addAll(manualChs.sortedBy { it.orderIndex })
+                
+                val plist = sortedChs.map {
                     ParsedChapter(
                         title = it.title,
                         contentHtml = it.contentHtml,
