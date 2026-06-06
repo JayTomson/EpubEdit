@@ -389,7 +389,7 @@ object BookConverter {
 
             val xhtml = """
                 <?xml version="1.0" encoding="utf-8"?>
-                <!DOCTYPE html>
+                <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
                 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
                 <head>
                     <title>${escapeXml(pc.title)}</title>
@@ -410,7 +410,10 @@ object BookConverter {
             zos.write(xhtml.toByteArray(Charsets.UTF_8))
             zos.closeEntry()
 
-            val safeChapTitle = escapeXml((pc.title ?: "Chapter ${i + 1}").replace(Regex("<[^>]*>"), "")).trim()
+            var safeChapTitle = escapeXml((pc.title ?: "").replace(Regex("<[^>]*>"), "")).trim()
+            if (safeChapTitle.isEmpty()) {
+                safeChapTitle = "Chapter ${i + 1}"
+            }
 
             manifestItems.append("<item id=\"$id\" href=\"$fileHref\" media-type=\"application/xhtml+xml\"/>\n")
             spineItems.append("<itemref idref=\"$id\"/>\n")
@@ -430,7 +433,7 @@ object BookConverter {
         zos.putNextEntry(ZipEntry("OEBPS/$navHref"))
         val navXhtml = """
             <?xml version="1.0" encoding="utf-8"?>
-            <!DOCTYPE html>
+            <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
             <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
             <head>
                 <title>Navigation</title>

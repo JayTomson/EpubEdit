@@ -826,7 +826,7 @@ object EpubProcessor {
                 // Standard XHTML template for high readers compatibility
                 val xhtmlContent = """
                     <?xml version="1.0" encoding="utf-8"?>
-                    <!DOCTYPE html>
+                    <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
                     <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
                     <head>
                         <title>${escapeXml(chap.title)}</title>
@@ -868,7 +868,10 @@ object EpubProcessor {
                 zos.write(xhtmlContent.toByteArray(Charsets.UTF_8))
                 zos.closeEntry()
 
-                val safeChapTitle = escapeXml(stripHtmlTags(chap.title ?: "Chapter ${idx + 1}")).trim()
+                var safeChapTitle = escapeXml(stripHtmlTags(chap.title ?: "")).trim()
+                if (safeChapTitle.isEmpty()) {
+                    safeChapTitle = "Chapter ${idx + 1}"
+                }
 
                 manifestItems.append("<item id=\"$chapId\" href=\"$href\" media-type=\"application/xhtml+xml\"/>\n")
                 spineItems.append("<itemref idref=\"$chapId\"/>\n")
@@ -888,7 +891,7 @@ object EpubProcessor {
             zos.putNextEntry(ZipEntry("OEBPS/$navHref"))
             val navXhtmlContent = """
                 <?xml version="1.0" encoding="utf-8"?>
-                <!DOCTYPE html>
+                <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
                 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
                 <head>
                     <title>Navigation</title>
