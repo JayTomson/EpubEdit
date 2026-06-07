@@ -387,7 +387,7 @@ object BookConverter {
                     <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
                 </rootfiles>
             </container>
-        """.trimIndent()
+        """.trimIndent().trim()
         zos.write(containerXml.toByteArray(Charsets.UTF_8))
         zos.closeEntry()
 
@@ -456,7 +456,7 @@ object BookConverter {
                     $headerTag${pc.contentHtml}
                 </body>
                 </html>
-            """.trimIndent()
+            """.trimIndent().trim()
 
             zos.write(xhtml.toByteArray(Charsets.UTF_8))
             zos.closeEntry()
@@ -499,7 +499,7 @@ object BookConverter {
                 </nav>
             </body>
             </html>
-        """.trimIndent()
+        """.trimIndent().trim()
         zos.write(navXhtml.toByteArray(Charsets.UTF_8))
         zos.closeEntry()
 
@@ -524,10 +524,11 @@ object BookConverter {
                     $manifestItems
                 </manifest>
                 <spine toc="ncx">
+                    <itemref idref="nav" linear="no"/>
                     $spineItems
                 </spine>
             </package>
-        """.trimIndent()
+        """.trimIndent().trim()
         zos.write(opf.toByteArray(Charsets.UTF_8))
         zos.closeEntry()
 
@@ -550,7 +551,7 @@ object BookConverter {
                     $ncxNavMap
                 </navMap>
             </ncx>
-        """.trimIndent()
+        """.trimIndent().trim()
         zos.write(ncx.toByteArray(Charsets.UTF_8))
         zos.closeEntry()
 

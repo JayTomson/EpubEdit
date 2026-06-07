@@ -883,7 +883,7 @@ object EpubProcessor {
                         <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
                     </rootfiles>
                 </container>
-            """.trimIndent()
+            """.trimIndent().trim()
             zos.write(containerXml.toByteArray(Charsets.UTF_8))
             zos.closeEntry()
 
@@ -1012,7 +1012,7 @@ object EpubProcessor {
                         $headerTag${cleanedHtml}
                     </body>
                     </html>
-                """.trimIndent()
+                """.trimIndent().trim()
                 
                 zos.write(xhtmlContent.toByteArray(Charsets.UTF_8))
                 zos.closeEntry()
@@ -1055,7 +1055,7 @@ object EpubProcessor {
                     </nav>
                 </body>
                 </html>
-            """.trimIndent()
+            """.trimIndent().trim()
             zos.write(navXhtmlContent.toByteArray(Charsets.UTF_8))
             zos.closeEntry()
 
@@ -1079,10 +1079,11 @@ object EpubProcessor {
                         $manifestItems
                     </manifest>
                     <spine toc="ncx">
+                        <itemref idref="nav" linear="no"/>
                         $spineItems
                     </spine>
                 </package>
-            """.trimIndent()
+            """.trimIndent().trim()
             zos.write(opfContent.toByteArray(Charsets.UTF_8))
             zos.closeEntry()
 
@@ -1105,7 +1106,7 @@ object EpubProcessor {
                         $ncxNavMap
                     </navMap>
                 </ncx>
-            """.trimIndent()
+            """.trimIndent().trim()
             zos.write(ncxContent.toByteArray(Charsets.UTF_8))
             zos.closeEntry()
 
