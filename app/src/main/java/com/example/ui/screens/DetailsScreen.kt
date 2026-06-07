@@ -630,6 +630,8 @@ fun ChaptersTabContent(
     var showAddManualDialog by remember { mutableStateOf(false) }
     var newManualChapterTitle by remember { mutableStateOf("") }
     var isMergingExporting by remember { mutableStateOf(false) }
+    var showExportOptions by remember { mutableStateOf(false) }
+    var isGenerateToc by remember { mutableStateOf(true) }
 
     // Stable optimized callbacks for high scrolling performance (no lambda churn on scroll)
     val onToggleSelection = remember(selectedChapters) {
@@ -795,22 +797,7 @@ fun ChaptersTabContent(
                 val buttonText = if (hasMultipleFiles) "Слить воедино" else "Экспорт EPUB"
                 
                 ExtendedFloatingActionButton(
-                    onClick = {
-                        isMergingExporting = true
-                        viewModel.exportMergedEpub(context, titleId) { file ->
-                            isMergingExporting = false
-                            if (file != null) {
-                                val msg = if (hasMultipleFiles) {
-                                    "EPUB успешно слит в папку Download: ${file.name}"
-                                } else {
-                                    "EPUB успешно сохранен в папку Download: ${file.name}"
-                                }
-                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
-                            } else {
-                                Toast.makeText(context, "Ошибка импорта / сборки EPUB", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    },
+                    onClick = { showExportOptions = true },
                     icon = { Icon(Icons.Default.Save, contentDescription = null) },
                     text = { Text(buttonText) },
                     containerColor = MaterialTheme.colorScheme.secondaryContainer,
@@ -831,6 +818,66 @@ fun ChaptersTabContent(
                     )
                 }
             }
+        }
+
+        // Export Options Dialog
+        if (showExportOptions) {
+            AlertDialog(
+                onDismissRequest = { showExportOptions = false },
+                title = { Text("Экспорт EPUB", fontWeight = FontWeight.Bold) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Text("Настройки сохранения:")
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { isGenerateToc = !isGenerateToc }
+                                .padding(vertical = 4.dp)
+                        ) {
+                            Checkbox(
+                                checked = isGenerateToc,
+                                onCheckedChange = { isGenerateToc = it }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "Генерировать файл содержания",
+                                fontSize = 14.sp
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showExportOptions = false
+                            isMergingExporting = true
+                            viewModel.exportMergedEpub(context, titleId, isGenerateToc) { file ->
+                                isMergingExporting = false
+                                if (file != null) {
+                                    val msg = if (sourceFiles.size >= 2) {
+                                        "EPUB успешно слит в папку Download: ${file.name}"
+                                    } else {
+                                        "EPUB успешно сохранен в папку Download: ${file.name}"
+                                    }
+                                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                } else {
+                                    Toast.makeText(context, "Ошибка сборки EPUB", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    ) {
+                        Text("СОХРАНИТЬ")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showExportOptions = false }) {
+                        Text("Отмена", color = MaterialTheme.colorScheme.outline)
+                    }
+                },
+                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                shape = RoundedCornerShape(24.dp)
+            )
         }
 
         // Selection Actions Bar

@@ -370,7 +370,7 @@ class BookViewModel(private val app: Application, private val repository: BookRe
         }
     }
 
-    fun exportMergedEpub(context: Context, titleId: Long, onFinished: (File?) -> Unit) {
+    fun exportMergedEpub(context: Context, titleId: Long, generateToc: Boolean = true, onFinished: (File?) -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val title = repository.getTitleByIdOneShot(titleId) ?: return@launch
@@ -396,7 +396,8 @@ class BookViewModel(private val app: Application, private val repository: BookRe
                     description = title.description ?: "",
                     coverImagePath = title.coverImage,
                     chapters = plist,
-                    titleId = titleId
+                    titleId = titleId,
+                    generateToc = generateToc
                 )
                 withContext(Dispatchers.Main) {
                     onFinished(result)

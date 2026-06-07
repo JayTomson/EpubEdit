@@ -490,8 +490,8 @@ fun EditorScreen(
                         key(block.id) {
                             when (block) {
                                 is ContentBlock.Text -> {
-                                    var tfValue by remember(block.htmlText) {
-                                        val clean = block.htmlText
+                                    val cleanText = remember(block.id) {
+                                        block.htmlText
                                             .replace(Regex("<[^>]*>"), "")
                                             .replace("&nbsp;", " ")
                                             .replace("&amp;", "&")
@@ -499,7 +499,18 @@ fun EditorScreen(
                                             .replace("&gt;", ">")
                                             .replace("&quot;", "\"")
                                             .replace("&apos;", "'")
-                                        mutableStateOf(TextFieldValue(clean))
+                                    }
+
+                                    var tfValue by remember(block.id) {
+                                        mutableStateOf(TextFieldValue(cleanText))
+                                    }
+
+                                    // Synchronize formatting button updates to the local TextFieldValue
+                                    LaunchedEffect(activeTextFieldValue) {
+                                        if (activeBlockIndex == index && tfValue.text != activeTextFieldValue.text) {
+                                            tfValue = activeTextFieldValue
+                                            editorBlocks[index] = ContentBlock.Text(tfValue.text, block.id)
+                                        }
                                     }
 
                                     OutlinedTextField(

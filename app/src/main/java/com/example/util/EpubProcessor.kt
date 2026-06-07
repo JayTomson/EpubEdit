@@ -956,7 +956,8 @@ object EpubProcessor {
         description: String,
         coverImagePath: String?,
         chapters: List<ParsedChapter>,
-        titleId: Long? = null
+        titleId: Long? = null,
+        generateToc: Boolean = true
     ): File? {
         val sanitizedFileName = if (fileName.endsWith(".epub", ignoreCase = true)) fileName else "$fileName.epub"
         
@@ -1130,16 +1131,29 @@ object EpubProcessor {
 
                 manifestItems.append("<item id=\"$chapId\" href=\"$href\" media-type=\"application/xhtml+xml\"/>\n")
                 spineItems.append("<itemref idref=\"$chapId\"/>\n")
-                navList.append("<li><a href=\"$href\">$safeChapTitle</a></li>\n")
-                ncxNavMap.append("""
-                    <navPoint id="$chapId" playOrder="${idx + 1}">
-                        <navLabel>
-                            <text>$safeChapTitle</text>
-                        </navLabel>
-                        <content src="$href"/>
-                    </navPoint>
-                """.trimIndent() + "\n")
+                if (generateToc) {
+                    navList.append("<li><a href=\"$href\">$safeChapTitle</a></li>\n")
+                    ncxNavMap.append("""
+                        <navPoint id="$chapId" playOrder="${idx + 1}">
+                            <navLabel>
+                                <text>$safeChapTitle</text>
+                            </navLabel>
+                            <content src="$href"/>
+                        </navPoint>
+                    """.trimIndent() + "\n")
+                }
             }
+
+            // Fallbacks for empty TOC required by EPUB spec
+            val finalNavList = if (navList.isEmpty()) "<li><a href=\"chapter_0.xhtml\">Начало</a></li>" else navList.toString()
+            val finalNcxNavMap = if (ncxNavMap.isEmpty()) """
+                <navPoint id="chapter_0" playOrder="1">
+                    <navLabel>
+                        <text>Начало</text>
+                    </navLabel>
+                    <content src="chapter_0.xhtml"/>
+                </navPoint>
+            """.trimIndent() else ncxNavMap.toString()
 
             // 3b. EPUB 3 nav.xhtml Navigation document
             val navHref = "nav.xhtml"
@@ -1156,7 +1170,7 @@ object EpubProcessor {
                     <nav epub:type="toc" id="toc">
                         <h1>${escapeXml(title)}</h1>
                         <ol>
-                            $navList
+                            $finalNavList
                         </ol>
                     </nav>
                 </body>
@@ -1209,7 +1223,7 @@ object EpubProcessor {
                         <text>$escapedTitle</text>
                     </docTitle>
                     <navMap>
-                        $ncxNavMap
+                        $finalNcxNavMap
                     </navMap>
                 </ncx>
             """.trimIndent().trim()
