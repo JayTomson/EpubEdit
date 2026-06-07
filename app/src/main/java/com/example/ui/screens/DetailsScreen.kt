@@ -764,9 +764,7 @@ fun ChaptersTabContent(
                         key = { it.id },
                         contentType = { "chapter_row" }
                     ) { item ->
-                        val isSelected = remember(selectedChapters, item.id) {
-                            selectedChapters.contains(item.id)
-                        }
+                        val isSelected = selectedChapters.contains(item.id)
                         ChapterRowItem(
                             item = item,
                             isSelectionMode = isSelectionMode,
