@@ -685,11 +685,29 @@ fun ChaptersTabContent(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "Всего глав: ${chapters.size}",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
+                if (isSelectionMode) {
+                    val allSelected = selectedChapters.size == chapters.size && chapters.isNotEmpty()
+                    TextButton(onClick = {
+                        if (allSelected) {
+                            selectedChapters.clear()
+                        } else {
+                            selectedChapters.clear()
+                            selectedChapters.addAll(chapters.map { it.id })
+                        }
+                    }) {
+                        Text(
+                            text = if (allSelected) "Снять выбор" else "Выбрать все (${chapters.size})",
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                } else {
+                    Text(
+                        text = "Всего глав: ${chapters.size}",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
 
                 TextButton(onClick = {
                     isSelectionMode = !isSelectionMode
