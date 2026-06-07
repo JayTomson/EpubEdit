@@ -629,6 +629,7 @@ fun ChaptersTabContent(
     var chapterToDelete by remember { mutableStateOf<Chapter?>(null) }
     var showAddManualDialog by remember { mutableStateOf(false) }
     var newManualChapterTitle by remember { mutableStateOf("") }
+    var isMergingExporting by remember { mutableStateOf(false) }
 
     // Stable optimized callbacks for high scrolling performance (no lambda churn on scroll)
     val onToggleSelection = remember(selectedChapters) {
@@ -779,7 +780,9 @@ fun ChaptersTabContent(
                 
                 ExtendedFloatingActionButton(
                     onClick = {
+                        isMergingExporting = true
                         viewModel.exportMergedEpub(context, titleId) { file ->
+                            isMergingExporting = false
                             if (file != null) {
                                 val msg = if (hasMultipleFiles) {
                                     "EPUB успешно слит в папку Download: ${file.name}"
@@ -1049,6 +1052,48 @@ fun ChaptersTabContent(
             containerColor = MaterialTheme.colorScheme.surfaceVariant,
             shape = RoundedCornerShape(24.dp)
         )
+    }
+
+    if (isMergingExporting) {
+        Dialog(onDismissRequest = {}) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth(0.9f)
+                    .wrapContentHeight(),
+                shape = RoundedCornerShape(28.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    CircularProgressIndicator(
+                        color = MaterialTheme.colorScheme.primary,
+                        strokeWidth = 4.dp,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(modifier = Modifier.height(20.dp))
+                    Text(
+                        text = if (sourceFiles.size >= 2) "Идет слияние томов..." else "Идет экспорт в EPUB...",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Пожалуйста, подождите. Собираем главы и упаковываем книгу в итоговый файл EPUB.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        }
     }
 }
 

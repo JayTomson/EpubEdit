@@ -48,7 +48,7 @@ class BookViewModel(private val app: Application, private val repository: BookRe
         }
         .stateIn(
             scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
+            started = SharingStarted.Lazily,
             initialValue = emptyList()
         )
 
@@ -58,7 +58,7 @@ class BookViewModel(private val app: Application, private val repository: BookRe
         }
         .stateIn(
             scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
+            started = SharingStarted.Lazily,
             initialValue = emptyList()
         )
 
@@ -319,14 +319,14 @@ class BookViewModel(private val app: Application, private val repository: BookRe
     }
 
     fun reorderChapters(chaptersList: List<Chapter>) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val updatedList = chaptersList.mapIndexed { i, ch -> ch.copy(orderIndex = i) }
             repository.updateChaptersOrder(updatedList)
         }
     }
 
     fun reorderSourceFiles(filesList: List<SourceFile>) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val updatedList = filesList.mapIndexed { i, f -> f.copy(orderIndex = i) }
             repository.updateSourceFilesOrder(updatedList)
 
