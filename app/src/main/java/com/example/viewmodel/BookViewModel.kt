@@ -251,8 +251,27 @@ class BookViewModel(private val app: Application, private val repository: BookRe
     }
 
     fun deleteSourceFile(file: SourceFile) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
+            // Delete the source file record
             repository.deleteSourceFile(file)
+            
+            val titleId = file.titleId
+            // Get all chapters for this title and delete those belonging to this source file
+            val allChs = repository.getChaptersForTitleOneShot(titleId)
+            val toDelete = allChs.filter { it.sourceFileId == file.id }
+            if (toDelete.isNotEmpty()) {
+                repository.deleteChapters(toDelete)
+            }
+            
+            // Re-index remaining chapters to keep orderIndex contiguous and properly sorted
+            val remainingChs = allChs.filter { it.sourceFileId != file.id }
+                .mapIndexed { idx, ch -> ch.copy(orderIndex = idx) }
+            repository.updateChaptersOrder(remainingChs)
+
+            // Also re-index remaining source files so their index is contiguous
+            val remainingFiles = repository.getSourceFilesForTitleOneShot(titleId)
+            val updatedFiles = remainingFiles.mapIndexed { idx, sf -> sf.copy(orderIndex = idx) }
+            repository.updateSourceFilesOrder(updatedFiles)
         }
     }
 
