@@ -8,9 +8,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -470,22 +472,6 @@ fun FilesTabContent(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Selector for unified files
-                    OutlinedButton(
-                        onClick = {
-                            showImportHubDialog = false
-                            unifiedLauncher.launch("*/*")
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(imageVector = Icons.Default.FolderOpen, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Выбрать любой другой файл")
-                    }
-
                     Spacer(modifier = Modifier.height(16.dp))
 
                     TextButton(
@@ -640,6 +626,7 @@ fun ChaptersTabContent(
     val selectedChapters = remember { mutableStateListOf<Long>() }
 
     var previewChWithHtml by remember { mutableStateOf<Chapter?>(null) }
+    var chapterToDelete by remember { mutableStateOf<Chapter?>(null) }
     var showAddManualDialog by remember { mutableStateOf(false) }
     var newManualChapterTitle by remember { mutableStateOf("") }
 
@@ -769,7 +756,8 @@ fun ChaptersTabContent(
                             onMoveUp = { onMoveUpChecked(item) },
                             onMoveDown = { onMoveDownChecked(item) },
                             onPreviewClick = { onPreviewClickChecked(item) },
-                            onEditClick = { onEditClickChecked(item.id) }
+                            onEditClick = { onEditClickChecked(item.id) },
+                            onLongClick = { chapterToDelete = item }
                         )
                     }
                 }
@@ -1032,8 +1020,39 @@ fun ChaptersTabContent(
             shape = RoundedCornerShape(24.dp)
         )
     }
+
+    if (chapterToDelete != null) {
+        AlertDialog(
+            onDismissRequest = { chapterToDelete = null },
+            title = { Text("Удалить главу?") },
+            text = { Text("Вы действительно хотите удалить главу \"${chapterToDelete?.title}\"? Это действие нельзя будет отменить.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        chapterToDelete?.let {
+                            viewModel.deleteSelectedChapters(listOf(it.id))
+                        }
+                        chapterToDelete = null
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Удалить")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { chapterToDelete = null }) {
+                    Text("Отмена", color = MaterialTheme.colorScheme.outline)
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            shape = RoundedCornerShape(24.dp)
+        )
+    }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ChapterRowItem(
     item: Chapter,
@@ -1043,7 +1062,8 @@ fun ChapterRowItem(
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
     onPreviewClick: () -> Unit,
-    onEditClick: () -> Unit
+    onEditClick: () -> Unit,
+    onLongClick: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(12.dp),
@@ -1051,7 +1071,18 @@ fun ChapterRowItem(
             containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f)
             else MaterialTheme.colorScheme.surfaceVariant
         ),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                onClick = {
+                    if (isSelectionMode) {
+                        onToggleSelection()
+                    } else {
+                        onEditClick()
+                    }
+                },
+                onLongClick = onLongClick
+            )
     ) {
         Row(
             modifier = Modifier

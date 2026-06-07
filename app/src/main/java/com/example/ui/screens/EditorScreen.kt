@@ -13,6 +13,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -424,35 +426,36 @@ fun EditorScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            Column(
+            LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Large Chapter Title Input
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        text = "НАЗВАНИЕ ГЛАВЫ",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(start = 4.dp)
-                    )
-                    OutlinedTextField(
-                        value = chapterTitle,
-                        onValueChange = { chapterTitle = it },
-                        textStyle = MaterialTheme.typography.titleLarge.copy(
-                            fontWeight = FontWeight.Bold
-                        ),
-                        placeholder = { Text("Куда уходит тень...") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                item {
+                    // Large Chapter Title Input
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "НАЗВАНИЕ ГЛАВЫ",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(start = 4.dp)
+                        )
+                        OutlinedTextField(
+                            value = chapterTitle,
+                            onValueChange = { chapterTitle = it },
+                            textStyle = MaterialTheme.typography.titleLarge.copy(
+                                fontWeight = FontWeight.Bold
+                            ),
+                            placeholder = { Text("Куда уходит тень...") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
 
-                // Active Core editor block (Displays based on formats)
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                item {
+                    // Title label for the content editor area
                     Text(
                         text = if (isHtmlMode) "HTML / КОРРЕКЦИЯ ТЕГАМИ" else "ВИЗУАЛЬНЫЙ ТЕКСТ главы (с поддержкой иллюстраций)",
                         fontSize = 11.sp,
@@ -460,8 +463,10 @@ fun EditorScreen(
                         color = MaterialTheme.colorScheme.tertiary,
                         modifier = Modifier.padding(start = 4.dp)
                     )
+                }
 
-                    if (isHtmlMode) {
+                if (isHtmlMode) {
+                    item {
                         // Advanced Code-Editor Style Raw Html inputs
                         OutlinedTextField(
                             value = contentHtml,
@@ -476,184 +481,181 @@ fun EditorScreen(
                             minLines = 15,
                             modifier = Modifier.fillMaxWidth()
                         )
-                    } else {
-                        // Visual styled rich preview block rendering editor
-                        Column(
-                            verticalArrangement = Arrangement.spacedBy(12.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            editorBlocks.forEachIndexed { index, block ->
-                                key(block.id) {
-                                    when (block) {
-                                        is ContentBlock.Text -> {
-                                            var tfValue by remember(block.htmlText) {
-                                                val clean = block.htmlText
-                                                    .replace(Regex("<[^>]*>"), "")
-                                                    .replace("&nbsp;", " ")
-                                                    .replace("&amp;", "&")
-                                                    .replace("&lt;", "<")
-                                                    .replace("&gt;", ">")
-                                                    .replace("&quot;", "\"")
-                                                    .replace("&apos;", "'")
-                                                mutableStateOf(TextFieldValue(clean))
+                    }
+                } else {
+                    itemsIndexed(
+                        items = editorBlocks,
+                        key = { _, block -> block.id }
+                    ) { index, block ->
+                        key(block.id) {
+                            when (block) {
+                                is ContentBlock.Text -> {
+                                    var tfValue by remember(block.htmlText) {
+                                        val clean = block.htmlText
+                                            .replace(Regex("<[^>]*>"), "")
+                                            .replace("&nbsp;", " ")
+                                            .replace("&amp;", "&")
+                                            .replace("&lt;", "<")
+                                            .replace("&gt;", ">")
+                                            .replace("&quot;", "\"")
+                                            .replace("&apos;", "'")
+                                        mutableStateOf(TextFieldValue(clean))
+                                    }
+
+                                    OutlinedTextField(
+                                        value = tfValue,
+                                        onValueChange = { newValue ->
+                                            tfValue = newValue
+                                            editorBlocks[index] = ContentBlock.Text(newValue.text, block.id)
+                                            if (activeBlockIndex == index) {
+                                                activeTextFieldValue = newValue
                                             }
+                                        },
+                                        placeholder = { Text("Введите text абзаца главы...") },
+                                        textStyle = TextStyle(
+                                            fontSize = 16.sp,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            lineHeight = 26.sp
+                                        ),
+                                        minLines = 3,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .onFocusChanged { focusState ->
+                                                if (focusState.isFocused) {
+                                                    activeBlockIndex = index
+                                                    activeTextFieldValue = tfValue
+                                                }
+                                            }
+                                    )
+                                }
+                                is ContentBlock.Image -> {
+                                    var showDeleteConfirmDialog by remember { mutableStateOf(false) }
 
-                                            OutlinedTextField(
-                                                value = tfValue,
-                                                onValueChange = { newValue ->
-                                                    tfValue = newValue
-                                                    editorBlocks[index] = ContentBlock.Text(newValue.text, block.id)
-                                                    if (activeBlockIndex == index) {
-                                                        activeTextFieldValue = newValue
+                                    Card(
+                                        shape = RoundedCornerShape(16.dp),
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                        ),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .wrapContentHeight()
+                                            .padding(vertical = 4.dp)
+                                            .border(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), RoundedCornerShape(16.dp)),
+                                        elevation = CardDefaults.cardElevation(2.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .combinedClickable(
+                                                    onClick = {
+                                                        Toast.makeText(context, "Зажмите для удаления иллюстрации", Toast.LENGTH_SHORT).show()
+                                                    },
+                                                    onLongClick = {
+                                                        showDeleteConfirmDialog = true
                                                     }
-                                                },
-                                                placeholder = { Text("Введите text абзаца главы...") },
-                                                textStyle = TextStyle(
-                                                    fontSize = 16.sp,
-                                                    color = MaterialTheme.colorScheme.onSurface,
-                                                    lineHeight = 26.sp
-                                                ),
-                                                minLines = 3,
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .onFocusChanged { focusState ->
-                                                        if (focusState.isFocused) {
-                                                            activeBlockIndex = index
-                                                            activeTextFieldValue = tfValue
-                                                        }
-                                                    }
-                                            )
-                                        }
-                                        is ContentBlock.Image -> {
-                                            var showDeleteConfirmDialog by remember { mutableStateOf(false) }
-
-                                            Card(
-                                                shape = RoundedCornerShape(16.dp),
-                                                colors = CardDefaults.cardColors(
-                                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                                                ),
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .wrapContentHeight()
-                                                    .padding(vertical = 4.dp)
-                                                    .border(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), RoundedCornerShape(16.dp)),
-                                                elevation = CardDefaults.cardElevation(2.dp)
+                                                )
+                                        ) {
+                                            Column(
+                                                modifier = Modifier.padding(8.dp),
+                                                horizontalAlignment = Alignment.CenterHorizontally
                                             ) {
-                                                Box(
-                                                    modifier = Modifier
-                                                        .fillMaxWidth()
-                                                        .combinedClickable(
-                                                            onClick = {
-                                                                Toast.makeText(context, "Зажмите для удаления иллюстрации", Toast.LENGTH_SHORT).show()
-                                                            },
-                                                            onLongClick = {
-                                                                showDeleteConfirmDialog = true
-                                                            }
-                                                        )
-                                                ) {
-                                                    Column(
-                                                        modifier = Modifier.padding(8.dp),
-                                                        horizontalAlignment = Alignment.CenterHorizontally
+                                                val file = File(block.localPath)
+                                                if (file.exists()) {
+                                                    AsyncImage(
+                                                        model = file,
+                                                        contentDescription = "Иллюстрация главы",
+                                                        contentScale = ContentScale.FillWidth,
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .clip(RoundedCornerShape(12.dp))
+                                                    )
+                                                } else {
+                                                    Row(
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .padding(16.dp),
+                                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
                                                     ) {
-                                                        val file = File(block.localPath)
-                                                        if (file.exists()) {
-                                                            AsyncImage(
-                                                                model = file,
-                                                                contentDescription = "Иллюстрация главы",
-                                                                contentScale = ContentScale.FillWidth,
-                                                                modifier = Modifier
-                                                                    .fillMaxWidth()
-                                                                    .clip(RoundedCornerShape(12.dp))
-                                                            )
-                                                        } else {
-                                                            Row(
-                                                                modifier = Modifier
-                                                                    .fillMaxWidth()
-                                                                    .padding(16.dp),
-                                                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                                                verticalAlignment = Alignment.CenterVertically
-                                                            ) {
-                                                                Icon(
-                                                                    imageVector = Icons.Default.BrokenImage,
-                                                                    contentDescription = "Файл изображения отсутствует",
-                                                                    tint = MaterialTheme.colorScheme.error
-                                                                )
-                                                                Text(
-                                                                    text = "Изображение '${file.name}' не найдено",
-                                                                    color = MaterialTheme.colorScheme.error,
-                                                                    fontSize = 13.sp
-                                                                )
-                                                            }
-                                                        }
-
+                                                        Icon(
+                                                            imageVector = Icons.Default.BrokenImage,
+                                                            contentDescription = "Файл изображения отсутствует",
+                                                            tint = MaterialTheme.colorScheme.error
+                                                        )
                                                         Text(
-                                                            text = "ИЛЛЮСТРАЦИЯ (Зажмите для удаления)",
-                                                            fontSize = 10.sp,
-                                                            fontWeight = FontWeight.Bold,
-                                                            color = MaterialTheme.colorScheme.secondary,
-                                                            modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                                                            text = "Изображение '${file.name}' не найдено",
+                                                            color = MaterialTheme.colorScheme.error,
+                                                            fontSize = 13.sp
                                                         )
                                                     }
                                                 }
-                                            }
 
-                                            if (showDeleteConfirmDialog) {
-                                                AlertDialog(
-                                                    onDismissRequest = { showDeleteConfirmDialog = false },
-                                                    title = { Text("Удалить иллюстрацию?") },
-                                                    text = { Text("Вы действительно хотите удалить эту иллюстрацию из главы?") },
-                                                    confirmButton = {
-                                                        Button(
-                                                            onClick = {
-                                                                editorBlocks.removeAt(index)
-                                                                
-                                                                // Post-deletion: merge adjacent ContentBlock.Text items
-                                                                val mergedList = mutableListOf<ContentBlock>()
-                                                                for (b in editorBlocks) {
-                                                                    if (mergedList.isNotEmpty() && mergedList.last() is ContentBlock.Text && b is ContentBlock.Text) {
-                                                                        val lastText = (mergedList.last() as ContentBlock.Text).htmlText
-                                                                        val currentText = b.htmlText
-                                                                        val combined = if (lastText.trim().isEmpty()) {
-                                                                            currentText
-                                                                        } else if (currentText.trim().isEmpty()) {
-                                                                            lastText
-                                                                        } else {
-                                                                            "$lastText\n$currentText"
-                                                                        }
-                                                                        // Keep the ID of the first text item to avoid focus/state rebuild
-                                                                        mergedList[mergedList.lastIndex] = ContentBlock.Text(combined, mergedList.last().id)
-                                                                    } else {
-                                                                        mergedList.add(b)
-                                                                    }
-                                                                }
-                                                                editorBlocks.clear()
-                                                                editorBlocks.addAll(mergedList)
-                                                                if (editorBlocks.isEmpty()) {
-                                                                    editorBlocks.add(ContentBlock.Text(""))
-                                                                }
-
-                                                                activeBlockIndex = null
-                                                                activeTextFieldValue = TextFieldValue("")
-                                                                showDeleteConfirmDialog = false
-                                                                Toast.makeText(context, "Иллюстрация удалена!", Toast.LENGTH_SHORT).show()
-                                                            },
-                                                            colors = ButtonDefaults.buttonColors(
-                                                                containerColor = MaterialTheme.colorScheme.error
-                                                            )
-                                                        ) {
-                                                            Text("Удалить")
-                                                        }
-                                                    },
-                                                    dismissButton = {
-                                                        TextButton(onClick = { showDeleteConfirmDialog = false }) {
-                                                            Text("Отмена", color = MaterialTheme.colorScheme.outline)
-                                                        }
-                                                    },
-                                                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                                    shape = RoundedCornerShape(24.dp)
+                                                Text(
+                                                    text = "ИЛЛЮСТРАЦИЯ (Зажмите для удаления)",
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.secondary,
+                                                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
                                                 )
                                             }
                                         }
+                                    }
+
+                                    if (showDeleteConfirmDialog) {
+                                        AlertDialog(
+                                            onDismissRequest = { showDeleteConfirmDialog = false },
+                                            title = { Text("Удалить иллюстрацию?") },
+                                            text = { Text("Вы действительно хотите удалить эту иллюстрацию из главы?") },
+                                            confirmButton = {
+                                                Button(
+                                                    onClick = {
+                                                        editorBlocks.removeAt(index)
+                                                        
+                                                        // Post-deletion: merge adjacent ContentBlock.Text items
+                                                        val mergedList = mutableListOf<ContentBlock>()
+                                                        for (b in editorBlocks) {
+                                                            if (mergedList.isNotEmpty() && mergedList.last() is ContentBlock.Text && b is ContentBlock.Text) {
+                                                                val lastText = (mergedList.last() as ContentBlock.Text).htmlText
+                                                                val currentText = b.htmlText
+                                                                val combined = if (lastText.trim().isEmpty()) {
+                                                                    currentText
+                                                                } else if (currentText.trim().isEmpty()) {
+                                                                    lastText
+                                                                } else {
+                                                                    "$lastText\n$currentText"
+                                                                }
+                                                                // Keep the ID of the first text item to avoid focus/state rebuild
+                                                                mergedList[mergedList.lastIndex] = ContentBlock.Text(combined, mergedList.last().id)
+                                                            } else {
+                                                                mergedList.add(b)
+                                                            }
+                                                        }
+                                                        editorBlocks.clear()
+                                                        editorBlocks.addAll(mergedList)
+                                                        if (editorBlocks.isEmpty()) {
+                                                            editorBlocks.add(ContentBlock.Text(""))
+                                                        }
+
+                                                        activeBlockIndex = null
+                                                        activeTextFieldValue = TextFieldValue("")
+                                                        showDeleteConfirmDialog = false
+                                                        Toast.makeText(context, "Иллюстрация удалена!", Toast.LENGTH_SHORT).show()
+                                                    },
+                                                    colors = ButtonDefaults.buttonColors(
+                                                        containerColor = MaterialTheme.colorScheme.error
+                                                    )
+                                                ) {
+                                                    Text("Удалить")
+                                                }
+                                            },
+                                            dismissButton = {
+                                                TextButton(onClick = { showDeleteConfirmDialog = false }) {
+                                                    Text("Отмена", color = MaterialTheme.colorScheme.outline)
+                                                }
+                                            },
+                                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                            shape = RoundedCornerShape(24.dp)
+                                        )
                                     }
                                 }
                             }
@@ -661,7 +663,9 @@ fun EditorScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(60.dp))
+                item {
+                    Spacer(modifier = Modifier.height(80.dp))
+                }
             }
 
             // Word count / character count Floating active badge

@@ -409,9 +409,10 @@ object EpubProcessor {
 
                         val finalEndIdx = if (endIdx == -1 || endIdx <= finalStartIdx) fullHtml.length else endIdx
                         val htmlSegment = fullHtml.substring(finalStartIdx, finalEndIdx)
+                        val cleanedHtmlSegment = cleanChapterHtml(htmlSegment)
 
-                        val words = WordStatsHelper.countWords(htmlSegment)
-                        val chars = WordStatsHelper.countCharacters(htmlSegment)
+                        val words = WordStatsHelper.countWords(cleanedHtmlSegment)
+                        val chars = WordStatsHelper.countCharacters(cleanedHtmlSegment)
 
                         var chapPreviewImagePath: String? = null
                         val imgRegex = Regex("<img[^>]+src\\s*=\\s*['\"]([^'\"]+)['\"]", RegexOption.IGNORE_CASE)
@@ -447,7 +448,7 @@ object EpubProcessor {
 
                         chaptersList.add(ParsedChapter(
                             title = bestTitle,
-                            contentHtml = htmlSegment,
+                            contentHtml = cleanedHtmlSegment,
                             wordCount = words,
                             characterCount = chars,
                             previewImagePath = chapPreviewImagePath
@@ -469,10 +470,11 @@ object EpubProcessor {
                         val chapterFile = File(opfDir, decodedHref)
                         if (chapterFile.exists()) {
                             val htmlContent = chapterFile.readText(Charsets.UTF_8)
+                            val cleanedHtmlContent = cleanChapterHtml(htmlContent)
                             val chapterTitle = extractTitleFromHtml(htmlContent, chapterFile.name)
 
-                            val words = WordStatsHelper.countWords(htmlContent)
-                            val chars = WordStatsHelper.countCharacters(htmlContent)
+                            val words = WordStatsHelper.countWords(cleanedHtmlContent)
+                            val chars = WordStatsHelper.countCharacters(cleanedHtmlContent)
 
                             var chapPreviewImagePath: String? = null
                             val imgRegex = Regex("<img[^>]+src=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
@@ -485,7 +487,7 @@ object EpubProcessor {
 
                             chaptersList.add(ParsedChapter(
                                 title = chapterTitle,
-                                contentHtml = htmlContent,
+                                contentHtml = cleanedHtmlContent,
                                 wordCount = words,
                                 characterCount = chars,
                                 previewImagePath = chapPreviewImagePath
@@ -504,10 +506,11 @@ object EpubProcessor {
             htmlFiles.forEach { file ->
                 try {
                     val htmlContent = file.readText(Charsets.UTF_8)
+                    val cleanedHtmlContent = cleanChapterHtml(htmlContent)
                     val chapterTitle = extractTitleFromHtml(htmlContent, file.name)
 
-                    val words = WordStatsHelper.countWords(htmlContent)
-                    val chars = WordStatsHelper.countCharacters(htmlContent)
+                    val words = WordStatsHelper.countWords(cleanedHtmlContent)
+                    val chars = WordStatsHelper.countCharacters(cleanedHtmlContent)
 
                     var chapPreviewImagePath: String? = null
                     val imgRegex = Regex("<img[^>]+src=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
@@ -520,7 +523,7 @@ object EpubProcessor {
 
                     chaptersList.add(ParsedChapter(
                         title = chapterTitle,
-                        contentHtml = htmlContent,
+                        contentHtml = cleanedHtmlContent,
                         wordCount = words,
                         characterCount = chars,
                         previewImagePath = chapPreviewImagePath
@@ -581,6 +584,29 @@ object EpubProcessor {
     }
 
     data class ManifestItem(val id: String, val href: String, val mediaType: String?)
+
+    fun cleanChapterHtml(html: String): String {
+        // 1. Remove comments
+        var cleaned = html.replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
+        
+        // 2. Remove script & style tags completely
+        cleaned = cleaned.replace(Regex("<script(?:\\s+[^>]*)?>.*?</script>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+        cleaned = cleaned.replace(Regex("<style(?:\\s+[^>]*)?>.*?</style>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+        
+        // 3. Extract only the contents of <body> if it exists, otherwise strip <head>/<html> wrappers
+        val bodyRegex = Regex("<body(?:\\s+[^>]*)?>(.*?)</body>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+        val bodyMatch = bodyRegex.find(cleaned)
+        if (bodyMatch != null) {
+            cleaned = bodyMatch.groupValues[1]
+        } else {
+            cleaned = cleaned.replace(Regex("<head(?:\\s+[^>]*)?>.*?</head>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+            cleaned = cleaned.replace(Regex("</?html(?:\\s+[^>]*)?>", RegexOption.IGNORE_CASE), "")
+            cleaned = cleaned.replace(Regex("<meta(?:\\s+[^>]*)?>", RegexOption.IGNORE_CASE), "")
+            cleaned = cleaned.replace(Regex("<link(?:\\s+[^>]*)?>", RegexOption.IGNORE_CASE), "")
+        }
+        
+        return cleaned.trim()
+    }
 
 
     private fun isGoodCandidate(text: String): Boolean {
@@ -1284,6 +1310,10 @@ object EpubProcessor {
         chapterTitle: String? = null
     ): List<ContentBlock> {
         val cleanedHtml = html
+            .replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
+            .replace(Regex("<style(?:\\s+[^>]*)?>.*?</style>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+            .replace(Regex("<script(?:\\s+[^>]*)?>.*?</script>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+            .replace(Regex("<head(?:\\s+[^>]*)?>.*?</head>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
 
         val blocks = mutableListOf<ContentBlock>()
         
