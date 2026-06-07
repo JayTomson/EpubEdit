@@ -58,19 +58,16 @@ object BookConverter {
                 title = titleNodes.item(0).textContent.trim()
             }
 
-            var author = "Unknown Author"
+            var author = ""
             val authorNodes = doc.getElementsByTagNameNS("*", "author")
             if (authorNodes.length > 0) {
                 val authorEl = authorNodes.item(0) as Element
                 val firstName = authorEl.getElementsByTagNameNS("*", "first-name").item(0)?.textContent?.trim() ?: ""
                 val lastName = authorEl.getElementsByTagNameNS("*", "last-name").item(0)?.textContent?.trim() ?: ""
                 author = "$firstName $lastName".trim()
-                if (author.isEmpty()) {
-                    author = "Unknown Author"
-                }
             }
 
-            var description = "FB2 Converted EPUB Book"
+            var description = ""
             val annotationNodes = doc.getElementsByTagNameNS("*", "annotation")
             if (annotationNodes.length > 0) {
                 description = annotationNodes.item(0).textContent.trim()

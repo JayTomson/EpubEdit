@@ -511,23 +511,18 @@ fun EditorScreen(
                                         mutableStateOf(TextFieldValue(cleanText))
                                     }
 
-                                    // Synchronize formatting button updates to the local TextFieldValue
-                                    LaunchedEffect(activeTextFieldValue) {
-                                        if (activeBlockIndex == index && tfValue.text != activeTextFieldValue.text) {
-                                            tfValue = activeTextFieldValue
-                                            editorBlocks[index] = ContentBlock.Text(tfValue.text, block.id)
-                                        }
-                                    }
+                                    val isFocused = activeBlockIndex == index
 
                                     OutlinedTextField(
-                                        value = tfValue,
+                                        value = if (isFocused) activeTextFieldValue else tfValue,
                                         onValueChange = { newValue ->
-                                            tfValue = newValue
-                                            if (activeBlockIndex == index) {
+                                            if (isFocused) {
                                                 activeTextFieldValue = newValue
+                                            } else {
+                                                tfValue = newValue
                                             }
                                         },
-                                        placeholder = { Text("Введите text абзаца главы...") },
+                                        placeholder = { Text("Введите текст абзаца...") },
                                         textStyle = TextStyle(
                                             fontSize = 16.sp,
                                             color = MaterialTheme.colorScheme.onSurface,
@@ -541,7 +536,12 @@ fun EditorScreen(
                                                     activeBlockIndex = index
                                                     activeTextFieldValue = tfValue
                                                 } else {
-                                                    editorBlocks[index] = ContentBlock.Text(tfValue.text, block.id)
+                                                    if (activeBlockIndex == index) {
+                                                        tfValue = activeTextFieldValue
+                                                        editorBlocks[index] = ContentBlock.Text(activeTextFieldValue.text, block.id)
+                                                    } else {
+                                                        editorBlocks[index] = ContentBlock.Text(tfValue.text, block.id)
+                                                    }
                                                 }
                                             }
                                     )

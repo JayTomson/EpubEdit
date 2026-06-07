@@ -1302,9 +1302,14 @@ fun InfoTabContent(
     viewModel: BookViewModel,
     title: Title
 ) {
+    val initialAuthor = title.author?.let { if (it == "Unknown Author") "" else it } ?: ""
+    val initialDesc = title.description?.let { 
+        if (it == "No description available" || it == "FB2 Converted EPUB Book") "" else it 
+    } ?: ""
+    
     var titleName by remember(title) { mutableStateOf(title.name) }
-    var authorName by remember(title) { mutableStateOf(title.author ?: "") }
-    var description by remember(title) { mutableStateOf(title.description ?: "") }
+    var authorName by remember(title) { mutableStateOf(initialAuthor) }
+    var description by remember(title) { mutableStateOf(initialDesc) }
     var outputFileName by remember(title) { mutableStateOf(title.outputFileName ?: "") }
     var coverPath by remember(title) { mutableStateOf(title.coverImage) }
 

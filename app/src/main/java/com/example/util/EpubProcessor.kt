@@ -1198,8 +1198,7 @@ object EpubProcessor {
                         $manifestItems
                     </manifest>
                     <spine toc="ncx">
-                        ${if (generateToc) "<itemref idref=\"nav\" linear=\"yes\"/>" else "<itemref idref=\"nav\" linear=\"no\"/>"}
-                        $spineItems
+                        ${if (generateToc) "<itemref idref=\"nav\" linear=\"yes\"/>\n" else ""}                        $spineItems
                     </spine>
                 </package>
             """.trimIndent().trim()
