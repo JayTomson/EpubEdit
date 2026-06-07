@@ -87,8 +87,8 @@ class BookViewModel(private val app: Application, private val repository: BookRe
         viewModelScope.launch {
             val title = Title(
                 name = name,
-                author = "Автор",
-                description = "Описание отсутствует...",
+                author = "",
+                description = "",
                 outputFileName = "${name.replace(" ", "_")}_final.epub"
             )
             repository.insertTitle(title)
@@ -283,10 +283,10 @@ class BookViewModel(private val app: Application, private val repository: BookRe
                 Chapter(
                     titleId = titleId,
                     title = title,
-                    contentHtml = "<p>Введите текст вашей новой главы...</p>",
+                    contentHtml = "",
                     orderIndex = newIdx,
-                    wordCount = 7,
-                    characterCount = 42
+                    wordCount = 0,
+                    characterCount = 0
                 )
             )
         }

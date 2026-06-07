@@ -74,11 +74,15 @@ fun EditorScreen(
 
     // Local mutable state fields synchronized on load
     var chapterTitle by remember(currentChapter) { mutableStateOf(currentChapter.title) }
-    var contentHtml by remember(currentChapter) { mutableStateOf(currentChapter.contentHtml) }
+    var contentHtml by remember(currentChapter) { 
+        val html = currentChapter.contentHtml
+        mutableStateOf(if (html == "<p>Введите текст вашей новой главы...</p>") "" else html) 
+    }
 
     // Visual Rich block list of sequential text and image nodes
     val editorBlocks = remember(currentChapter) {
-        val parsed = EpubProcessor.parseContentIntoBlocks(context, currentChapter.contentHtml, currentChapter.titleId, currentChapter.title).toMutableStateList()
+        val initialHtml = if (currentChapter.contentHtml == "<p>Введите текст вашей новой главы...</p>") "" else currentChapter.contentHtml
+        val parsed = EpubProcessor.parseContentIntoBlocks(context, initialHtml, currentChapter.titleId, currentChapter.title).toMutableStateList()
         if (parsed.isEmpty()) {
             parsed.add(ContentBlock.Text(""))
         }

@@ -1302,9 +1302,9 @@ fun InfoTabContent(
     viewModel: BookViewModel,
     title: Title
 ) {
-    val initialAuthor = title.author?.let { if (it == "Unknown Author") "" else it } ?: ""
+    val initialAuthor = title.author?.let { if (it == "Unknown Author" || it == "Автор") "" else it } ?: ""
     val initialDesc = title.description?.let { 
-        if (it == "No description available" || it == "FB2 Converted EPUB Book") "" else it 
+        if (it == "No description available" || it == "FB2 Converted EPUB Book" || it == "Описание отсутствует...") "" else it 
     } ?: ""
     
     var titleName by remember(title) { mutableStateOf(title.name) }
@@ -1427,6 +1427,7 @@ fun InfoTabContent(
                 value = authorName,
                 onValueChange = { authorName = it },
                 label = { Text("Имя автора / переводчика") },
+                placeholder = { Text("Автор") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -1449,6 +1450,7 @@ fun InfoTabContent(
                 value = description,
                 onValueChange = { description = it },
                 label = { Text("Описание / Синопсис") },
+                placeholder = { Text("Описание отсутствует...") },
                 minLines = 4,
                 modifier = Modifier.fillMaxWidth()
             )
