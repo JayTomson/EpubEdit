@@ -1131,17 +1131,16 @@ object EpubProcessor {
 
                 manifestItems.append("<item id=\"$chapId\" href=\"$href\" media-type=\"application/xhtml+xml\"/>\n")
                 spineItems.append("<itemref idref=\"$chapId\"/>\n")
-                if (generateToc) {
-                    navList.append("<li><a href=\"$href\">$safeChapTitle</a></li>\n")
-                    ncxNavMap.append("""
-                        <navPoint id="$chapId" playOrder="${idx + 1}">
-                            <navLabel>
-                                <text>$safeChapTitle</text>
-                            </navLabel>
-                            <content src="$href"/>
-                        </navPoint>
-                    """.trimIndent() + "\n")
-                }
+
+                navList.append("<li><a href=\"$href\">$safeChapTitle</a></li>\n")
+                ncxNavMap.append("""
+                    <navPoint id="$chapId" playOrder="${idx + 1}">
+                        <navLabel>
+                            <text>$safeChapTitle</text>
+                        </navLabel>
+                        <content src="$href"/>
+                    </navPoint>
+                """.trimIndent() + "\n")
             }
 
             // Fallbacks for empty TOC required by EPUB spec
@@ -1199,7 +1198,7 @@ object EpubProcessor {
                         $manifestItems
                     </manifest>
                     <spine toc="ncx">
-                        <itemref idref="nav" linear="no"/>
+                        ${if (generateToc) "<itemref idref=\"nav\" linear=\"yes\"/>" else ""}
                         $spineItems
                     </spine>
                 </package>
