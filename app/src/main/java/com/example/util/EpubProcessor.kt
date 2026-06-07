@@ -617,8 +617,8 @@ object EpubProcessor {
 
         val defaultTitle = extractedTitle?.let { stripHtmlTags(it) }?.trim()
             ?: (getFileNameFromUri(context, uri)?.removeSuffix(".epub") ?: "Parsed Title")
-        val defaultAuthor = extractedAuthor?.let { stripHtmlTags(it) }?.trim() ?: "Unknown Author"
-        val defaultDesc = extractedDesc?.let { stripHtmlTags(it) }?.trim() ?: "No description available"
+        val defaultAuthor = extractedAuthor?.let { stripHtmlTags(it) }?.trim() ?: ""
+        val defaultDesc = extractedDesc?.let { stripHtmlTags(it) }?.trim() ?: ""
 
         return ParsedEpub(
             title = defaultTitle,
@@ -1198,7 +1198,7 @@ object EpubProcessor {
                         $manifestItems
                     </manifest>
                     <spine toc="ncx">
-                        ${if (generateToc) "<itemref idref=\"nav\" linear=\"yes\"/>" else ""}
+                        ${if (generateToc) "<itemref idref=\"nav\" linear=\"yes\"/>" else "<itemref idref=\"nav\" linear=\"no\"/>"}
                         $spineItems
                     </spine>
                 </package>

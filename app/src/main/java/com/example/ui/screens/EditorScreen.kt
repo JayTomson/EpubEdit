@@ -229,6 +229,12 @@ fun EditorScreen(
                     actions = {
                         Button(
                             onClick = {
+                                if (!isHtmlMode && activeBlockIndex != null) {
+                                    val idx = activeBlockIndex!!
+                                    if (idx in editorBlocks.indices && editorBlocks[idx] is ContentBlock.Text) {
+                                        editorBlocks[idx] = ContentBlock.Text(activeTextFieldValue.text, editorBlocks[idx].id)
+                                    }
+                                }
                                 val finalHtml = if (isHtmlMode) contentHtml else serializeBlocksToHtml(editorBlocks)
                                 viewModel.updateChapterContent(
                                     chapterId = chapterId,
@@ -283,7 +289,7 @@ fun EditorScreen(
                         val idx = activeBlockIndex
                         if (idx != null && idx in editorBlocks.indices) {
                             if (editorBlocks[idx] is ContentBlock.Text) {
-                                editorBlocks[idx] = ContentBlock.Text(newText)
+                                editorBlocks[idx] = ContentBlock.Text(newText, editorBlocks[idx].id)
                                 activeTextFieldValue = activeTextFieldValue.copy(text = newText)
                             }
                         }
@@ -517,7 +523,6 @@ fun EditorScreen(
                                         value = tfValue,
                                         onValueChange = { newValue ->
                                             tfValue = newValue
-                                            editorBlocks[index] = ContentBlock.Text(newValue.text, block.id)
                                             if (activeBlockIndex == index) {
                                                 activeTextFieldValue = newValue
                                             }
@@ -535,6 +540,8 @@ fun EditorScreen(
                                                 if (focusState.isFocused) {
                                                     activeBlockIndex = index
                                                     activeTextFieldValue = tfValue
+                                                } else {
+                                                    editorBlocks[index] = ContentBlock.Text(tfValue.text, block.id)
                                                 }
                                             }
                                     )
