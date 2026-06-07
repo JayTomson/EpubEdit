@@ -150,8 +150,9 @@ object EpubProcessor {
                     val id = item.getAttribute("id")
                     val href = item.getAttribute("href")
                     val mediaType = item.getAttribute("media-type")
+                    val properties = item.getAttribute("properties").ifEmpty { null }
                     if (id.isNotEmpty() && href.isNotEmpty()) {
-                        manifestItems[id] = ManifestItem(id, href, mediaType)
+                        manifestItems[id] = ManifestItem(id, href, mediaType, properties)
                     }
                 }
 
@@ -185,6 +186,7 @@ object EpubProcessor {
                     val idRegex = Regex("id\\s*=\\s*['\"]([^'\"]+)['\"]", RegexOption.IGNORE_CASE)
                     val hrefRegex = Regex("href\\s*=\\s*['\"]([^'\"]+)['\"]", RegexOption.IGNORE_CASE)
                     val mediaTypeRegex = Regex("media-type\\s*=\\s*['\"]([^'\"]+)['\"]", RegexOption.IGNORE_CASE)
+                    val propertiesRegex = Regex("properties\\s*=\\s*['\"]([^'\"]+)['\"]", RegexOption.IGNORE_CASE)
                     
                     itemRegex.find(opfText) // trigger parsing
                     itemRegex.findAll(opfText).forEach { match ->
@@ -192,8 +194,9 @@ object EpubProcessor {
                         val id = idRegex.find(attrs)?.groupValues?.get(1) ?: ""
                         val href = hrefRegex.find(attrs)?.groupValues?.get(1) ?: ""
                         val mediaType = mediaTypeRegex.find(attrs)?.groupValues?.get(1) ?: ""
+                        val properties = propertiesRegex.find(attrs)?.groupValues?.get(1)
                         if (id.isNotEmpty() && href.isNotEmpty()) {
-                            manifestItems[id] = ManifestItem(id, href, mediaType)
+                            manifestItems[id] = ManifestItem(id, href, mediaType, properties)
                         }
                     }
                     
@@ -372,6 +375,81 @@ object EpubProcessor {
                     Log.e(TAG, "Regex fallback for toc.ncx failed", ex)
                 }
             }
+        }
+
+        // ── EPUB 3: nav.xhtml fallback ──────────────────────────────────────
+        // Если NCX не найден или пуст — ищем EPUB3 nav.xhtml и парсим его TOC
+        if (ncxNavPoints.isEmpty()) {
+            val navManifestItem = manifestItems.values.firstOrNull { item ->
+                item.properties?.split(" ")?.contains("nav") == true
+            } ?: manifestItems.values.firstOrNull { item ->
+                item.mediaType?.lowercase()?.contains("xhtml") == true &&
+                (item.href.lowercase().contains("nav") || 
+                 item.href.lowercase().endsWith("nav.xhtml"))
+            } ?: run {
+                var found: ManifestItem? = null
+                fun findNav(dir: File) {
+                    dir.listFiles()?.forEach { f ->
+                        if (f.isDirectory) {
+                            findNav(f)
+                        } else if (f.name.lowercase() == "nav.xhtml" || f.name.lowercase() == "nav.htm") {
+                            val relativePath = try {
+                                f.relativeTo(opfDir).path
+                            } catch (e: Exception) {
+                                f.relativeTo(tempDir).path
+                            }
+                            found = ManifestItem(f.name, relativePath, "application/xhtml+xml")
+                        }
+                    }
+                }
+                findNav(tempDir)
+                found
+            }
+
+            if (navManifestItem != null) {
+                val navFile = File(opfDir, navManifestItem.href)
+                if (navFile.exists()) {
+                    try {
+                        val navText = navFile.readText(Charsets.UTF_8)
+                        val linkRegex = Regex(
+                            """<a\s+[^>]*href\s*=\s*['"]([^'"]+)['"][^>]*>(.*?)</a>""",
+                            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+                        )
+                        var order = 0
+                        linkRegex.findAll(navText).forEach { match ->
+                            val rawHref = match.groupValues[1]
+                                .replace("&amp;", "&").replace("&quot;", "\"")
+                            val title = stripHtmlTags(match.groupValues[2]).trim()
+                                .ifBlank { "Untitled Chapter" }
+
+                            val hashIdx = rawHref.indexOf('#')
+                            val fileHref = if (hashIdx != -1) rawHref.substring(0, hashIdx) else rawHref
+                            val anchor = if (hashIdx != -1) rawHref.substring(hashIdx + 1) else null
+
+                            val lc = title.lowercase()
+                            if (lc !in setOf("toc", "contents", "navigation", "оглавление", "содержание")) {
+                                ncxNavPoints.add(
+                                    NcxNavPoint(title, rawHref, fileHref, anchor, order++)
+                                )
+                            }
+                        }
+                        Log.d(TAG, "EPUB3 nav.xhtml parsed: ${ncxNavPoints.size} chapters found")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed parsing EPUB3 nav.xhtml", e)
+                    }
+                }
+            }
+        }
+
+        // Deduplicate navPoints to prevent redundant duplicate sections or loops
+        if (ncxNavPoints.isNotEmpty()) {
+            val seen = mutableSetOf<String>()
+            val deduped = ncxNavPoints.filter { point ->
+                val key = "${point.fileHref}#${point.anchor ?: ""}".lowercase()
+                seen.add(key)
+            }
+            ncxNavPoints.clear()
+            ncxNavPoints.addAll(deduped)
         }
 
         // 4. Parse chapters (with fallbacks)
@@ -575,7 +653,9 @@ object EpubProcessor {
             for (regex in regexes) {
                 val match = regex.find(html)
                 if (match != null) {
-                    return match.range.first
+                    val attrPos = match.range.first
+                    val tagStart = html.lastIndexOf('<', attrPos)
+                    return if (tagStart != -1) tagStart else attrPos
                 }
             }
         }
@@ -583,7 +663,7 @@ object EpubProcessor {
         return -1
     }
 
-    data class ManifestItem(val id: String, val href: String, val mediaType: String?)
+    data class ManifestItem(val id: String, val href: String, val mediaType: String?, val properties: String? = null)
 
     fun cleanChapterHtml(html: String): String {
         // 1. Remove comments
