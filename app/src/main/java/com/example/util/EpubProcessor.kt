@@ -430,7 +430,7 @@ object EpubProcessor {
                         var bestTitle = item.title.trim()
                         val isNumeric = bestTitle.matches(Regex("\\d+"))
                         val isGenericShort = bestTitle.lowercase() in setOf("гл", "гл.", "ch", "ch.", "chapter", "глава", "часть", "том")
-                        val isVeryShort = bestTitle.length <= 4
+                        val isVeryShort = bestTitle.length <= 2 && !isNumeric
                         
                         val lowerTitle = bestTitle.lowercase()
                         val isUninformative = isNumeric || isGenericShort || isVeryShort ||

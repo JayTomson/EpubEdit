@@ -188,7 +188,7 @@ object BookConverter {
 
                         // If title is just a number or very short, try to pull a more informative title from the HTML content
                         val isNumeric = secTitle.matches(Regex("\\d+"))
-                        val isVeryShort = secTitle.length <= 4
+                        val isVeryShort = secTitle.length <= 2 && !isNumeric
                         val lowerSecTitle = secTitle.lowercase()
                         val isUninformative = isNumeric || isVeryShort ||
                             lowerSecTitle in setOf("untitled", "untitled chapter", "chapter", "glava", "глава", "часть", "номер") ||
