@@ -329,6 +329,25 @@ class BookViewModel(private val app: Application, private val repository: BookRe
         viewModelScope.launch {
             val updatedList = filesList.mapIndexed { i, f -> f.copy(orderIndex = i) }
             repository.updateSourceFilesOrder(updatedList)
+
+            // Auto-reorder the chapters belonging to these source files to match the new file order
+            val titleId = filesList.firstOrNull()?.titleId ?: return@launch
+            val allChs = repository.getChaptersForTitleOneShot(titleId)
+            val fileOrderMap = filesList.mapIndexed { index, sf -> sf.id to index }.toMap()
+
+            val orderedChapters = allChs.sortedWith(
+                compareBy<Chapter> { ch ->
+                    val fileIndex = ch.sourceFileId?.let { fileOrderMap[it] }
+                    fileIndex ?: Int.MAX_VALUE // Put chapters without a file (e.g. manually added ones) at the end
+                }.thenBy { ch ->
+                    ch.orderIndex // Preserve original relative order of chapters within each file/section
+                }
+            )
+
+            val updatedChaptersList = orderedChapters.mapIndexed { index, ch ->
+                ch.copy(orderIndex = index)
+            }
+            repository.updateChaptersOrder(updatedChaptersList)
         }
     }
 
