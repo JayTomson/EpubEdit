@@ -120,3 +120,12 @@ dependencies {
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
 }
+
+tasks.register("restoreEditorScreen") {
+    doLast {
+        val p = Runtime.getRuntime().exec(arrayOf("git", "status"), null, File("."))
+        p.waitFor()
+        println("Git exit code: ${p.exitValue()}")
+        println("Error: " + p.errorStream.bufferedReader().readText())
+    }
+}

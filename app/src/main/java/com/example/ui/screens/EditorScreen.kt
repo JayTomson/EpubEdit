@@ -9,6 +9,8 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -92,13 +94,82 @@ fun decodeHtmlEntities(html: String): String {
     }
 }
 
-fun formatHtmlForEditing(html: String): String {
-    if (html.count { it == '\n' } > 3) return html // already has some multiline formatting
-    return html
-        .replace(Regex("</(p|div|h[1-6]|ul|ol|li|blockquote|section)>", RegexOption.IGNORE_CASE), "</$1>\n\n")
-        .replace(Regex("<(p|div|h[1-6]|ul|ol|li|blockquote|section)", RegexOption.IGNORE_CASE), "\n<$1")
-        .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "<br/>\n")
-        .trim()
+fun htmlToPlainText(html: String): String {
+    if (html.isBlank()) return ""
+    var text = html
+    // Replace <p> tags with space wrappers, and close tags with newlines
+    text = text.replace(Regex("(?i)<p(?:\\s+[^>]*)?>"), "")
+    text = text.replace(Regex("(?i)</p>"), "\n\n")
+    
+    // Convert <br> tags cleanly
+    text = text.replace(Regex("(?i)<br\\s*/?>"), "\n")
+    
+    // Convert headings
+    text = text.replace(Regex("(?i)<h([1-6])(?:\\s+[^>]*)?>"), "")
+    text = text.replace(Regex("(?i)</h[1-6]>"), "\n\n")
+    
+    // Convert list items
+    text = text.replace(Regex("(?i)<li(?:\\s+[^>]*)?>"), "• ")
+    text = text.replace(Regex("(?i)</li>"), "\n")
+    text = text.replace(Regex("(?i)</?u[l,o][^>]*>"), "\n")
+    
+    // Filter structural tags cleanly
+    text = text.replace(Regex("(?i)</?div[^>]*>"), "\n")
+    text = text.replace(Regex("(?i)</?body[^>]*>"), "")
+    text = text.replace(Regex("(?i)</?html[^>]*>"), "")
+    text = text.replace(Regex("(?i)<head(?:\\s+[^>]*)?>.*?</head>", RegexOption.DOT_MATCHES_ALL), "")
+    
+    // Clean remaining tags but retain styling inside custom entities
+    text = text.replace(Regex("<[^>]*>"), "")
+    
+    // Reduce duplicate white empty paragraphs
+    text = text.replace(Regex("\n{3,}"), "\n\n")
+    
+    return decodeHtmlEntities(text).trim()
+}
+
+fun plainTextToHtml(plainText: String): String {
+    if (plainText.isBlank()) return "<p></p>"
+    val paragraphs = plainText.split(Regex("\\n\\s*\\n+"))
+    val sb = StringBuilder()
+    for (paragraph in paragraphs) {
+        val trimmed = paragraph.trim()
+        if (trimHTMLAndPlain(trimmed).isNotEmpty()) {
+            val lower = trimmed.lowercase()
+            if (lower.startsWith("<p") || lower.startsWith("<h") || lower.startsWith("<div") || lower.startsWith("<blockquote") || lower.startsWith("<li")) {
+                sb.append(trimmed).append("\n")
+            } else {
+                val formattedContent = trimmed.replace("\n", "<br/>\n")
+                sb.append("<p>").append(formattedContent).append("</p>\n")
+            }
+        }
+    }
+    return sb.toString().trim()
+}
+
+private fun trimHTMLAndPlain(input: String): String {
+    return input.replace(Regex("<[^>]*>"), "").trim()
+}
+
+fun isCursorOnEmptyLine(tf: TextFieldValue): Boolean {
+    if (!tf.selection.collapsed) return false
+    val text = tf.text
+    val cursor = tf.selection.start
+    
+    // Find start of current line
+    var startOfLine = cursor
+    while (startOfLine > 0 && text[startOfLine - 1] != '\n') {
+        startOfLine--
+    }
+    
+    // Find end of current line
+    var endOfLine = cursor
+    while (endOfLine < text.length && text[endOfLine] != '\n') {
+        endOfLine++
+    }
+    
+    val lineText = text.substring(startOfLine, endOfLine)
+    return lineText.trim().isEmpty()
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -126,19 +197,46 @@ fun EditorScreen(
 
     var chapterTitle by remember(currentChapter) { mutableStateOf(currentChapter.title) }
     
-    var contentHtml by remember(currentChapter) { 
-        val raw = currentChapter.contentHtml
-        mutableStateOf(if (raw == "<p>Введите текст вашей новой главы...</p>") "" else formatHtmlForEditing(raw))
-    }
+    // Tracks editing mode (false = Visual/Plain Text, true = Raw HTML)
+    var isHtmlMode by remember { mutableStateOf(false) }
+    
+    // Is full screen mode active
+    var isFullscreen by remember { mutableStateOf(false) }
 
-    var htmlTextFieldValue by remember(contentHtml) {
-        mutableStateOf(TextFieldValue(contentHtml))
+    // Text editor states
+    var visualTextState by remember(currentChapter) {
+        val pText = htmlToPlainText(currentChapter.contentHtml)
+        mutableStateOf(TextFieldValue(if (pText == "Введите текст вашей новой главы...") "" else pText))
+    }
+    
+    var htmlTextState by remember(currentChapter) {
+        val raw = currentChapter.contentHtml
+        mutableStateOf(TextFieldValue(if (raw == "<p>Введите текст вашей новой главы...</p>") "" else raw))
     }
 
     var showUnsavedChangesDialog by remember { mutableStateOf(false) }
 
+    // Synchronize mode contents upon toggle
+    val toggleMode = {
+        if (isHtmlMode) {
+            // HTML to Plain Text conversion
+            val convertedText = htmlToPlainText(htmlTextState.text)
+            visualTextState = TextFieldValue(convertedText)
+            isHtmlMode = false
+        } else {
+            // Plain Text to HTML conversion
+            val convertedHtml = plainTextToHtml(visualTextState.text)
+            htmlTextState = TextFieldValue(convertedHtml)
+            isHtmlMode = true
+        }
+    }
+
+    val currentContentText = {
+        if (isHtmlMode) htmlTextState.text else plainTextToHtml(visualTextState.text)
+    }
+
     val applyFormatAction = { tagOpen: String, tagClose: String ->
-        val tf = htmlTextFieldValue
+        val tf = if (isHtmlMode) htmlTextState else visualTextState
         val text = tf.text
         val selection = tf.selection
         val newText: String
@@ -153,38 +251,20 @@ fun EditorScreen(
             newCursorIdx = cursor + tagOpen.length
         }
         val updatedTf = TextFieldValue(newText, androidx.compose.ui.text.TextRange(newCursorIdx))
-        htmlTextFieldValue = updatedTf
-        contentHtml = newText
-    }
-
-    fun saveIllustrationLocally(context: Context, uri: Uri): String? {
-        val mediaDir = File(context.filesDir, "epub_media")
-        if (!mediaDir.exists()) mediaDir.mkdirs()
-        var ext = "jpg"
-        try {
-            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                if (nameIdx != -1 && cursor.moveToFirst()) {
-                    val name = cursor.getString(nameIdx)
-                    if (!name.isNullOrEmpty()) {
-                        ext = name.substringAfterLast(".", "jpg").trim().lowercase()
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e("EditorScreen", "Failed querying name for URI: $uri", e)
+        if (isHtmlMode) {
+            htmlTextState = updatedTf
+        } else {
+            visualTextState = updatedTf
         }
-        val destFile = File(mediaDir, "media_${System.currentTimeMillis()}.${ext}")
-        return try {
-            val ips = context.contentResolver.openInputStream(uri) ?: return null
-            val ops = FileOutputStream(destFile)
-            ips.use { input -> ops.use { output -> input.copyTo(output) } }
-            destFile.absolutePath
-        } catch (e: Exception) { null }
     }
 
     val imagePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
+            val tf = if (isHtmlMode) htmlTextState else visualTextState
+            if (!isCursorOnEmptyLine(tf)) {
+                Toast.makeText(context, "Иллюстрацию можно вставить только на пустую строку!", Toast.LENGTH_LONG).show()
+                return@let
+            }
             val cachedPath = saveIllustrationLocally(context, it)
             if (cachedPath != null) {
                 val fileName = File(cachedPath).name
@@ -197,8 +277,18 @@ fun EditorScreen(
         }
     }
 
+    val performSave = {
+        viewModel.updateChapterContent(
+            chapterId = chapterId,
+            title = chapterTitle.trim(),
+            contentHtml = currentContentText(),
+            previewImagePath = currentChapter.previewImagePath
+        )
+        Toast.makeText(context, "Глава сохранена!", Toast.LENGTH_SHORT).show()
+    }
+
     BackHandler {
-        if (chapterTitle.trim() != currentChapter.title || htmlTextFieldValue.text.trim() != currentChapter.contentHtml.trim()) {
+        if (chapterTitle.trim() != currentChapter.title || currentContentText().trim() != currentChapter.contentHtml.trim()) {
             showUnsavedChangesDialog = true
         } else {
             onBackClick()
@@ -230,38 +320,32 @@ fun EditorScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Редактор HTML", fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = {
-                        if (chapterTitle.trim() != currentChapter.title || htmlTextFieldValue.text.trim() != currentChapter.contentHtml.trim()) {
-                            showUnsavedChangesDialog = true
-                        } else {
-                            onBackClick()
+            if (!isFullscreen) {
+                TopAppBar(
+                    title = { Text("Редактор ePub", fontWeight = FontWeight.Bold) },
+                    navigationIcon = {
+                        IconButton(onClick = {
+                            if (chapterTitle.trim() != currentChapter.title || currentContentText().trim() != currentChapter.contentHtml.trim()) {
+                                showUnsavedChangesDialog = true
+                            } else {
+                                onBackClick()
+                            }
+                        }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад", tint = MaterialTheme.colorScheme.primary)
                         }
-                    }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад", tint = MaterialTheme.colorScheme.primary)
+                    },
+                    actions = {
+                        Button(
+                            onClick = { performSave() },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) { Text("СОХРАНИТЬ", fontWeight = FontWeight.Bold) }
                     }
-                },
-                actions = {
-                    Button(
-                        onClick = {
-                            viewModel.updateChapterContent(
-                                chapterId = chapterId,
-                                title = chapterTitle.trim(),
-                                contentHtml = htmlTextFieldValue.text,
-                                previewImagePath = currentChapter.previewImagePath
-                            )
-                            Toast.makeText(context, "Глава сохранена!", Toast.LENGTH_SHORT).show()
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary
-                        ),
-                        shape = RoundedCornerShape(12.dp)
-                    ) { Text("СОХРАНИТЬ", fontWeight = FontWeight.Bold) }
-                }
-            )
+                )
+            }
         },
         bottomBar = {
             Card(
@@ -270,26 +354,115 @@ fun EditorScreen(
                 elevation = CardDefaults.cardElevation(8.dp),
                 modifier = Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.ime)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        IconButton(onClick = { applyFormatAction("<b>", "</b>") }) {
-                            Icon(Icons.Default.FormatBold, "Жирный")
+                Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+                    // Row of rich styling actions
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            IconButton(onClick = { applyFormatAction("<b>", "</b>") }) {
+                                Icon(Icons.Default.FormatBold, "Жирный")
+                            }
+                            IconButton(onClick = { applyFormatAction("<i>", "</i>") }) {
+                                Icon(Icons.Default.FormatItalic, "Курсив")
+                            }
+                            IconButton(onClick = { applyFormatAction("<u>", "</u>") }) {
+                                Icon(Icons.Default.FormatUnderlined, "Подчеркнутый")
+                            }
+                            IconButton(onClick = { applyFormatAction("<s>", "</s>") }) {
+                                Icon(Icons.Default.FormatStrikethrough, "Зачеркнутый")
+                            }
+                            IconButton(onClick = { applyFormatAction("<p>", "</p>") }) {
+                                Icon(Icons.Default.Segment, "Абзац")
+                            }
+                            IconButton(onClick = {
+                                val tf = if (isHtmlMode) htmlTextState else visualTextState
+                                if (!isCursorOnEmptyLine(tf)) {
+                                    Toast.makeText(context, "Иллюстрацию можно вставить только на пустую строку!", Toast.LENGTH_LONG).show()
+                                } else {
+                                    imagePickerLauncher.launch("image/*")
+                                }
+                            }) {
+                                Icon(Icons.Default.AddPhotoAlternate, "Вставить картинку")
+                            }
                         }
-                        IconButton(onClick = { applyFormatAction("<i>", "</i>") }) {
-                            Icon(Icons.Default.FormatItalic, "Курсив")
+                        
+                        // Fullscreen / Exit Fullscreen Button
+                        IconButton(onClick = { isFullscreen = !isFullscreen }) {
+                            Icon(
+                                if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen, 
+                                contentDescription = if (isFullscreen) "Выйти из полного экрана" else "На весь экран",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
                         }
-                        IconButton(onClick = { applyFormatAction("<u>", "</u>") }) {
-                            Icon(Icons.Default.FormatUnderlined, "Подчеркнутый")
+                    }
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    // Toggle Switch Button between normal editing and HTML code
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .background(MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(24.dp))
+                                .padding(4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .background(
+                                        if (!isHtmlMode) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                        RoundedCornerShape(20.dp)
+                                    )
+                                    .clickable { if (isHtmlMode) toggleMode() }
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    "Текст",
+                                    color = if (!isHtmlMode) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .background(
+                                        if (isHtmlMode) MaterialTheme.colorScheme.primary else Color.Transparent,
+                                        RoundedCornerShape(20.dp)
+                                    )
+                                    .clickable { if (!isHtmlMode) toggleMode() }
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    "HTML код",
+                                    color = if (isHtmlMode) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                            }
                         }
-                        IconButton(onClick = { applyFormatAction("<p>", "</p>") }) {
-                            Icon(Icons.Default.Segment, "Абзац")
-                        }
-                        IconButton(onClick = { imagePickerLauncher.launch("image/*") }) {
-                            Icon(Icons.Default.AddPhotoAlternate, "Вставить картинку")
+                        
+                        // Save quick access if fullscreen
+                        if (isFullscreen) {
+                            Button(
+                                onClick = { performSave() },
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                                shape = RoundedCornerShape(50)
+                            ) {
+                                Icon(Icons.Default.Save, "Сохранить", modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Сохранить", fontSize = 12.sp)
+                            }
                         }
                     }
                 }
@@ -302,35 +475,111 @@ fun EditorScreen(
                 .padding(innerPadding)
                 .padding(horizontal = 16.dp)
         ) {
-            Spacer(modifier = Modifier.height(16.dp))
-            Text("НАЗВАНИЕ", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-            OutlinedTextField(
-                value = chapterTitle,
-                onValueChange = { chapterTitle = it },
-                textStyle = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.fillMaxWidth()
-            )
-            
-            Spacer(modifier = Modifier.height(16.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("HTML КОД ГЛАВЫ", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.tertiary)
-                val words = try { WordStatsHelper.countWords(htmlTextFieldValue.text) } catch (e: Exception) { 0 }
-                Text("Слов: $words", fontSize = 11.sp, color = MaterialTheme.colorScheme.outline)
+            if (!isFullscreen) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text("НАЗВАНИЕ ГЛАВЫ", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                OutlinedTextField(
+                    value = chapterTitle,
+                    onValueChange = { chapterTitle = it },
+                    textStyle = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+            } else {
+                Spacer(modifier = Modifier.height(8.dp))
             }
-            Spacer(modifier = Modifier.height(4.dp))
-            OutlinedTextField(
-                value = htmlTextFieldValue,
-                onValueChange = { htmlTextFieldValue = it },
-                textStyle = TextStyle(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 15.sp,
-                    color = MaterialTheme.colorScheme.onSurface
-                ),
+            
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (isHtmlMode) "HTML-КОД ГЛАВЫ" else "ТЕКСТ ГЛАВЫ", 
+                    fontSize = 11.sp, 
+                    fontWeight = FontWeight.Bold, 
+                    color = if (isHtmlMode) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.secondary
+                )
+                val totalWords = WordStatsHelper.countWords(if (isHtmlMode) htmlTextState.text else visualTextState.text)
+                Text("Слов: $totalWords", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline, fontWeight = FontWeight.Medium)
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            
+            // Clean text editor sheet
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .padding(bottom = 16.dp)
-            )
+                    .padding(bottom = 12.dp)
+                    .background(
+                        if (isHtmlMode) Color(0xFF1E1E24) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                        RoundedCornerShape(16.dp)
+                    )
+                    .border(
+                        1.dp,
+                        if (isHtmlMode) Color(0xFF2E2E38) else MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
+                        RoundedCornerShape(16.dp)
+                    )
+                    .padding(12.dp)
+            ) {
+                OutlinedTextField(
+                    value = if (isHtmlMode) htmlTextState else visualTextState,
+                    onValueChange = {
+                        if (isHtmlMode) htmlTextState = it else visualTextState = it
+                    },
+                    textStyle = if (isHtmlMode) {
+                        TextStyle(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 14.sp,
+                            color = Color(0xFFE2E2E2)
+                        )
+                    } else {
+                        TextStyle(
+                            fontFamily = FontFamily.SansSerif,
+                            fontSize = 16.sp,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            lineHeight = 24.sp
+                        )
+                    },
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent
+                    ),
+                    modifier = Modifier.fillMaxSize(),
+                    placeholder = {
+                        Text(
+                            if (isHtmlMode) "<h2>Заголовок</h2>\n<p>Введите HTML код...</p>" else "Введите текст здесь...",
+                            color = if (isHtmlMode) Color.Gray else MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
+                        )
+                    }
+                )
+            }
         }
     }
+}
+
+fun saveIllustrationLocally(context: Context, uri: Uri): String? {
+    val mediaDir = File(context.filesDir, "epub_media")
+    if (!mediaDir.exists()) mediaDir.mkdirs()
+    var ext = "jpg"
+    try {
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+            if (nameIdx != -1 && cursor.moveToFirst()) {
+                val name = cursor.getString(nameIdx)
+                if (!name.isNullOrEmpty()) {
+                    ext = name.substringAfterLast(".", "jpg").trim().lowercase()
+                }
+            }
+        }
+    } catch (e: Exception) {
+        Log.e("EditorScreen", "Error getting extension", e)
+    }
+    val destFile = File(mediaDir, "media_${System.currentTimeMillis()}.${ext}")
+    return try {
+        val ips = context.contentResolver.openInputStream(uri) ?: return null
+        val ops = FileOutputStream(destFile)
+        ips.use { input -> ops.use { output -> input.copyTo(output) } }
+        destFile.absolutePath
+    } catch (e: Exception) { null }
 }
