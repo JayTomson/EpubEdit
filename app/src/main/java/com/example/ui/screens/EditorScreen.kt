@@ -212,7 +212,7 @@ fun EditorScreen(
     var isItalicActive by remember { mutableStateOf(false) }
     var isUnderlineActive by remember { mutableStateOf(false) }
 
-    var htmlTextFieldValue by remember(contentHtml) {
+    var htmlTextFieldValue by remember(currentChapter, isHtmlMode) {
         mutableStateOf(TextFieldValue(contentHtml))
     }
 
@@ -386,12 +386,22 @@ fun EditorScreen(
             mediaDir.mkdirs()
         }
         var ext = "jpg"
-        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-            if (nameIdx != -1 && cursor.moveToFirst()) {
-                val name = cursor.getString(nameIdx)
-                ext = name.substringAfterLast(".", "jpg").lowercase()
+        try {
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (nameIdx != -1 && cursor.moveToFirst()) {
+                    val name = cursor.getString(nameIdx)
+                    if (!name.isNullOrEmpty()) {
+                        ext = name.substringAfterLast(".", "jpg").trim().lowercase()
+                    }
+                }
             }
+        } catch (e: Exception) {
+            Log.e("EditorScreen", "Failed querying name for URI: $uri", e)
+        }
+
+        if (ext.length > 5 || ext.any { !it.isLetterOrDigit() }) {
+            ext = "jpg"
         }
         
         val destFile = File(mediaDir, "media_${System.currentTimeMillis()}.${ext}")
