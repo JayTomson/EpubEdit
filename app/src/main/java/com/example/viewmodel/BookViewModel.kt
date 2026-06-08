@@ -22,6 +22,24 @@ import androidx.lifecycle.AndroidViewModel
 
 class BookViewModel(private val app: Application, private val repository: BookRepository) : AndroidViewModel(app) {
 
+    private val prefs = app.getSharedPreferences("app_settings", Context.MODE_PRIVATE)
+
+    private val _currentLanguage = MutableStateFlow(prefs.getString("pref_language", "ru") ?: "ru")
+    val currentLanguage: StateFlow<String> = _currentLanguage.asStateFlow()
+
+    private val _htmlAutoCloseEnabled = MutableStateFlow(prefs.getBoolean("pref_html_autoclose", false))
+    val htmlAutoCloseEnabled: StateFlow<Boolean> = _htmlAutoCloseEnabled.asStateFlow()
+
+    fun updateLanguage(lang: String) {
+        prefs.edit().putString("pref_language", lang).apply()
+        _currentLanguage.value = lang
+    }
+
+    fun updateHtmlAutoClose(enabled: Boolean) {
+        prefs.edit().putBoolean("pref_html_autoclose", enabled).apply()
+        _htmlAutoCloseEnabled.value = enabled
+    }
+
     val titles: StateFlow<List<Title>> = repository.allTitles
         .stateIn(
             scope = viewModelScope,

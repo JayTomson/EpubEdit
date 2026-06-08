@@ -14,7 +14,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
+import com.example.util.Loc
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,7 +44,11 @@ fun LibraryScreen(
 ) {
     val titles by viewModel.titles.collectAsState()
     var showAddDialog by remember { mutableStateOf(false) }
+    var showSettingsDialog by remember { mutableStateOf(false) }
     var newTitleName by remember { mutableStateOf("") }
+
+    val currentLang by viewModel.currentLanguage.collectAsState()
+    val htmlAutoCloseEnabled by viewModel.htmlAutoCloseEnabled.collectAsState()
 
     Scaffold(
         topBar = {
@@ -67,6 +73,15 @@ fun LibraryScreen(
                         )
                     }
                 },
+                actions = {
+                    IconButton(onClick = { showSettingsDialog = true }) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = Loc.t("settings", currentLang),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface
                 )
@@ -82,7 +97,7 @@ fun LibraryScreen(
             ) {
                 Icon(
                     imageVector = Icons.Default.Add,
-                    contentDescription = "Добавить тайтл",
+                    contentDescription = Loc.t("add_title", currentLang),
                     modifier = Modifier.size(28.dp)
                 )
             }
@@ -119,20 +134,20 @@ fun LibraryScreen(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Book,
-                        contentDescription = "Пусто",
+                        contentDescription = "Empty",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
                         modifier = Modifier.size(100.dp)
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = "Нет добавленных тайтлов",
+                        text = Loc.t("no_titles", currentLang),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Нажмите на кнопку + , чтобы создать новый проект",
+                        text = Loc.t("press_add_button", currentLang),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 32.dp)
@@ -148,6 +163,7 @@ fun LibraryScreen(
                     items(titles, key = { it.id }) { item ->
                         BookCard(
                             title = item,
+                            currentLang = currentLang,
                             onClick = { onBookClick(item.id) },
                             onDelete = { viewModel.deleteTitle(item) }
                         )
@@ -165,7 +181,7 @@ fun LibraryScreen(
             },
             title = {
                 Text(
-                    text = "Новый тайтл",
+                    text = Loc.t("new_title", currentLang),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary
@@ -174,7 +190,7 @@ fun LibraryScreen(
             text = {
                 Column {
                     Text(
-                        text = "Введите название книжного проекта или оригинального тайтла:",
+                        text = Loc.t("enter_title", currentLang),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(bottom = 12.dp)
@@ -182,8 +198,8 @@ fun LibraryScreen(
                     OutlinedTextField(
                         value = newTitleName,
                         onValueChange = { newTitleName = it },
-                        label = { Text("Название тайтла") },
-                        placeholder = { Text("Например: Beyond the Event Horizon") },
+                        label = { Text(Loc.t("title_label", currentLang)) },
+                        placeholder = { Text(Loc.t("title_placeholder", currentLang)) },
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = MaterialTheme.colorScheme.primary,
@@ -207,7 +223,7 @@ fun LibraryScreen(
                         contentColor = MaterialTheme.colorScheme.onPrimaryContainer
                     )
                 ) {
-                    Text("Создать")
+                    Text(Loc.t("create", currentLang))
                 }
             },
             dismissButton = {
@@ -217,7 +233,137 @@ fun LibraryScreen(
                         newTitleName = ""
                     }
                 ) {
-                    Text("Отмена", color = MaterialTheme.colorScheme.outline)
+                    Text(Loc.t("cancel", currentLang), color = MaterialTheme.colorScheme.outline)
+                }
+            },
+            shape = RoundedCornerShape(24.dp),
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    }
+
+    if (showSettingsDialog) {
+        AlertDialog(
+            onDismissRequest = { showSettingsDialog = false },
+            title = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = Loc.t("settings", currentLang),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    // Category: Language Selection
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = Loc.t("language", currentLang),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            // Russian Option
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(if (currentLang == "ru") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
+                                    .clickable { viewModel.updateLanguage("ru") }
+                                    .padding(vertical = 12.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "Русский",
+                                    color = if (currentLang == "ru") MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp
+                                )
+                            }
+                            // English Option
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(if (currentLang == "en") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
+                                    .clickable { viewModel.updateLanguage("en") }
+                                    .padding(vertical = 12.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "English",
+                                    color = if (currentLang == "en") MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    // Category: Editor Preferences
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                            .clickable { viewModel.updateHtmlAutoClose(!htmlAutoCloseEnabled) }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text(
+                                text = Loc.t("auto_close", currentLang),
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = if (currentLang == "en") "Automatically insert closing tags when typing >" else "Автоматически закрывать HTML-теги при вводе >",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = htmlAutoCloseEnabled,
+                            onCheckedChange = { viewModel.updateHtmlAutoClose(it) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                                checkedTrackColor = MaterialTheme.colorScheme.primary
+                            )
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showSettingsDialog = false },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(Loc.t("close", currentLang))
                 }
             },
             shape = RoundedCornerShape(24.dp),
@@ -229,6 +375,7 @@ fun LibraryScreen(
 @Composable
 fun BookCard(
     title: Title,
+    currentLang: String,
     onClick: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -258,7 +405,7 @@ fun BookCard(
                 if (!title.coverImage.isNullOrEmpty()) {
                     AsyncImage(
                         model = File(title.coverImage),
-                        contentDescription = "Обложка",
+                        contentDescription = "Cover",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
                     )
@@ -328,7 +475,7 @@ fun BookCard(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Delete,
-                                contentDescription = "Удалить тайтл",
+                                contentDescription = Loc.t("delete_title", currentLang),
                                 tint = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
                                 modifier = Modifier.size(18.dp)
                             )
@@ -337,7 +484,7 @@ fun BookCard(
 
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = title.author ?: "Автор не указан",
+                        text = title.author ?: Loc.t("no_author", currentLang),
                         style = MaterialTheme.typography.bodyMedium.copy(
                             fontStyle = FontStyle.Italic
                         ),
@@ -363,12 +510,12 @@ fun BookCard(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Schedule,
-                        contentDescription = "Изменен",
+                        contentDescription = "Created",
                         tint = MaterialTheme.colorScheme.tertiary,
                         modifier = Modifier.size(14.dp)
                     )
                     Text(
-                        text = "Создан: " + formatTime(title.createdAt),
+                        text = Loc.t("created_at", currentLang) + formatTime(title.createdAt),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

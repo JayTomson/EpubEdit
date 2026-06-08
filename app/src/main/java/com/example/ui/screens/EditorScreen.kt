@@ -327,6 +327,8 @@ fun EditorScreen(
     }
 
     val chapter by viewModel.editingChapter.collectAsState()
+    val lang by viewModel.currentLanguage.collectAsState()
+    val htmlAutoCloseEnabled by viewModel.htmlAutoCloseEnabled.collectAsState()
 
     if (chapter == null) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -736,7 +738,7 @@ fun EditorScreen(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    "Текст",
+                                    com.example.util.Loc.t("visual", lang),
                                     color = if (!isHtmlMode) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer,
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 12.sp
@@ -753,7 +755,7 @@ fun EditorScreen(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    "HTML код",
+                                    com.example.util.Loc.t("html_code", lang),
                                     color = if (isHtmlMode) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer,
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 12.sp
@@ -831,7 +833,11 @@ fun EditorScreen(
                     OutlinedTextField(
                         value = htmlTextState,
                         onValueChange = { newVal ->
-                            htmlTextState = handleHtmlAutoClose(htmlTextState, newVal)
+                            htmlTextState = if (htmlAutoCloseEnabled) {
+                                handleHtmlAutoClose(htmlTextState, newVal)
+                            } else {
+                                newVal
+                            }
                         },
                         textStyle = TextStyle(
                             fontFamily = FontFamily.Monospace,
