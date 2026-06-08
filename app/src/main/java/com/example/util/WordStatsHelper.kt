@@ -26,11 +26,13 @@ object WordStatsHelper {
     }
 
     /**
-     * Counts the number of characters in a given text (symbols / glyphs excluding HTML tags).
+     * Counts the number of characters in a given text (symbols / glyphs excluding HTML tags and spaces/newlines).
      */
     fun countCharacters(htmlOrText: String?): Int {
         if (htmlOrText.isNullOrBlank()) return 0
-        val cleanText = htmlOrText.replace(Regex("<[^>]*>"), "")
+        var cleanText = htmlOrText.replace(Regex("<[^>]*>"), "")
+        // Remove all whitespaces, tabs, newlines, and non-breaking spaces
+        cleanText = cleanText.replace(Regex("[\\s\\u00A0]+"), "")
         return cleanText.length
     }
 }
