@@ -102,6 +102,17 @@ class BookViewModel(private val app: Application, private val repository: BookRe
                     val mediaDir = File(app.filesDir, "epub_media")
                     mediaDir.listFiles { _, name -> name.startsWith("book_${title.id}_") }
                         ?.forEach { it.delete() }
+                        
+                    // Scan chapter content for explicit media insertion files
+                    val chapters = repository.getChaptersForTitleOneShot(title.id)
+                    val imgRegex = Regex("<img[^>]+src=[\"'](media_[a-zA-Z0-9_.]+)[\"']", RegexOption.IGNORE_CASE)
+                    chapters.forEach { chapter ->
+                        imgRegex.findAll(chapter.contentHtml).forEach { match ->
+                            val fileName = match.groupValues[1]
+                            val target = File(mediaDir, fileName)
+                            if (target.exists()) target.delete()
+                        }
+                    }
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
@@ -283,7 +294,7 @@ class BookViewModel(private val app: Application, private val repository: BookRe
                 Chapter(
                     titleId = titleId,
                     title = title,
-                    contentHtml = "",
+                    contentHtml = "<p></p>",
                     orderIndex = newIdx,
                     wordCount = 0,
                     characterCount = 0
@@ -299,7 +310,7 @@ class BookViewModel(private val app: Application, private val repository: BookRe
             val chars = WordStatsHelper.countCharacters(contentHtml)
             
             val updated = current.copy(
-                title = title,
+                title = title.ifBlank { "Без названия" },
                 contentHtml = contentHtml,
                 previewImagePath = previewImagePath,
                 wordCount = words,
@@ -315,6 +326,20 @@ class BookViewModel(private val app: Application, private val repository: BookRe
             val allChs = repository.getChaptersForTitleOneShot(_selectedTitleId.value ?: return@launch)
             val toDelete = allChs.filter { it.id in idSet }
             repository.deleteChapters(toDelete)
+            
+            withContext(Dispatchers.IO) {
+                try {
+                    val mediaDir = File(app.filesDir, "epub_media")
+                    val imgRegex = Regex("<img[^>]+src=[\"'](media_[a-zA-Z0-9_.]+)[\"']", RegexOption.IGNORE_CASE)
+                    toDelete.forEach { chapter ->
+                        imgRegex.findAll(chapter.contentHtml).forEach { match ->
+                            val fileName = match.groupValues[1]
+                            val target = File(mediaDir, fileName)
+                            if (target.exists()) target.delete()
+                        }
+                    }
+                } catch (e: Exception) {}
+            }
             
             // Re-index remaining chapters to keep orderIndex contiguous
             val remaining = allChs.filter { it.id !in idSet }
@@ -384,7 +409,8 @@ class BookViewModel(private val app: Application, private val repository: BookRe
                         title = it.title,
                         contentHtml = it.contentHtml,
                         wordCount = it.wordCount,
-                        characterCount = it.characterCount
+                        characterCount = it.characterCount,
+                        previewImagePath = it.previewImagePath
                     )
                 }
 

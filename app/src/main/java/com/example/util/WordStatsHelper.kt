@@ -16,7 +16,7 @@ object WordStatsHelper {
         // Regex for matching words (Latin & Cyrillic sequences, allowing internal hyphens and apostrophes)
         // [a-zA-Z0-9А-Яа-яЁё]+ matches any alphanumeric sequence in English or Russian
         // (?:[-'][a-zA-Z0-9А-Яа-яЁё]+)* handles composite words like "кто-то", "it's"
-        val wordPattern = Pattern.compile("[a-zA-Z0-9А-Яа-яЁё]+(?:[-'][a-zA-Z0-9А-Яа-яЁё]+)*")
+        val wordPattern = Pattern.compile("[\\p{L}\\p{N}]+(?:[-'][\\p{L}\\p{N}]+)*")
         val matcher = wordPattern.matcher(cleanText)
         var count = 0
         while (matcher.find()) {

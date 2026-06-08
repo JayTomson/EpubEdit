@@ -399,7 +399,7 @@ fun FilesTabContent(
                         colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                         ),
-                        border = RowBorder(Color.Blue.copy(alpha = 0.1f))
+                        border = RowBorder(MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
                     ) {
                         Row(
                             modifier = Modifier
@@ -445,7 +445,7 @@ fun FilesTabContent(
                         colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                         ),
-                        border = RowBorder(Color.Green.copy(alpha = 0.1f))
+                        border = RowBorder(MaterialTheme.colorScheme.secondary.copy(alpha = 0.3f))
                     ) {
                         Row(
                             modifier = Modifier
@@ -505,9 +505,12 @@ fun FilesTabContent(
             confirmButton = {
                 Button(
                     onClick = {
-                        if (renameInputText.isNotBlank()) {
-                            viewModel.renameSourceFile(fileToRename!!, renameInputText.trim())
+                        val cleanName = renameInputText.trim()
+                        if (cleanName.isNotBlank() && !cleanName.contains("/") && !cleanName.contains("\\")) {
+                            viewModel.renameSourceFile(fileToRename!!, cleanName)
                             showRenameDialog = false
+                        } else {
+                            Toast.makeText(context, "Некорректное имя файла", Toast.LENGTH_SHORT).show()
                         }
                     }
                 ) {
@@ -675,9 +678,18 @@ fun ChaptersTabContent(
             previewChWithHtml = item
         }
     }
-    val onEditClickChecked = remember {
+                    val onEditClickChecked = remember {
         { id: Long ->
             onChapterEditClick(id)
+        }
+    }
+    
+    val onLongClickChecked = remember {
+        { item: Chapter ->
+            if (!isSelectionMode) {
+                isSelectionMode = true
+                selectedChapters.add(item.id)
+            }
         }
     }
 
@@ -780,7 +792,7 @@ fun ChaptersTabContent(
                             onMoveDown = { onMoveDownChecked(item) },
                             onPreviewClick = { onPreviewClickChecked(item) },
                             onEditClick = { onEditClickChecked(item.id) },
-                            onLongClick = { chapterToDelete = item }
+                            onLongClick = { onLongClickChecked(item) }
                         )
                     }
                 }
@@ -1022,7 +1034,7 @@ fun ChaptersTabContent(
                                             update = { textView ->
                                                 textView.setTextColor(textColor.toArgb())
                                                 textView.text = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
-                                                    Html.fromHtml(rawHtml, Html.FROM_HTML_MODE_LEGACY)
+                                                    Html.fromHtml(rawHtml, Html.FROM_HTML_MODE_COMPACT)
                                                 } else {
                                                     @Suppress("DEPRECATION")
                                                     Html.fromHtml(rawHtml)
@@ -1087,7 +1099,7 @@ fun ChaptersTabContent(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showAddManualDialog = false }) {
+                TextButton(onClick = { showAddManualDialog = false; newManualChapterTitle = "" }) {
                     Text("Отмена", color = MaterialTheme.colorScheme.outline)
                 }
             },
@@ -1127,7 +1139,7 @@ fun ChaptersTabContent(
     }
 
     if (isMergingExporting) {
-        Dialog(onDismissRequest = {}) {
+        Dialog(onDismissRequest = { isMergingExporting = false }) {
             Card(
                 modifier = Modifier
                     .fillMaxWidth(0.9f)
@@ -1194,8 +1206,6 @@ fun ChapterRowItem(
                 onClick = {
                     if (isSelectionMode) {
                         onToggleSelection()
-                    } else {
-                        onEditClick()
                     }
                 },
                 onLongClick = onLongClick

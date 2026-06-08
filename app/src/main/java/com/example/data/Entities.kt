@@ -66,7 +66,7 @@ data class Chapter(
     val titleId: Long,
     val sourceFileId: Long? = null,
     val title: String,
-    val contentHtml: String,
+    val contentHtml: String = "",
     val orderIndex: Int = 0,
     val wordCount: Int = 0,
     val characterCount: Int = 0,
