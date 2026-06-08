@@ -38,6 +38,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.graphics.toArgb
+import android.widget.TextView
+import android.text.Html
 import coil.compose.AsyncImage
 import com.example.data.Chapter
 import com.example.data.SourceFile
@@ -1002,23 +1006,28 @@ fun ChaptersTabContent(
                         items(contentBlocks) { block ->
                             when (block) {
                                 is ContentBlock.Text -> {
-                                    val cleanText = block.htmlText
-                                        .replace(Regex("<[^>]*>"), "")
-                                        .replace("&nbsp;", " ")
-                                        .replace("&amp;", "&")
-                                        .replace("&lt;", "<")
-                                        .replace("&gt;", ">")
-                                        .replace("&quot;", "\"")
-                                        .replace("&apos;", "'")
-                                        .replace(Regex("\n+"), "\n")
-                                        .trim()
-                                    if (cleanText.isNotEmpty()) {
-                                        Text(
-                                            text = cleanText,
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f),
-                                            lineHeight = 26.sp,
-                                            modifier = Modifier.padding(vertical = 6.dp)
+                                    val rawHtml = block.htmlText
+                                    if (rawHtml.isNotBlank()) {
+                                        val textColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
+                                        AndroidView(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(vertical = 8.dp),
+                                            factory = { ctx ->
+                                                TextView(ctx).apply {
+                                                    textSize = 18f
+                                                    setLineSpacing(6f, 1.3f)
+                                                }
+                                            },
+                                            update = { textView ->
+                                                textView.setTextColor(textColor.toArgb())
+                                                textView.text = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                                                    Html.fromHtml(rawHtml, Html.FROM_HTML_MODE_LEGACY)
+                                                } else {
+                                                    @Suppress("DEPRECATION")
+                                                    Html.fromHtml(rawHtml)
+                                                }
+                                            }
                                         )
                                     }
                                 }

@@ -224,7 +224,7 @@ fun EditorScreen(
     var contentHtmlTfv by remember(currentChapter) {
         val html = currentChapter.contentHtml
         val txt = if (html == "<p>Введите текст вашей новой главы...</p>") "" else html
-        mutableStateOf(TextFieldValue(decodeHtmlEntities(txt)))
+        mutableStateOf(TextFieldValue(formatHtmlForEditor(decodeHtmlEntities(txt))))
     }
 
     fun saveIllustrationLocally(context: Context, uri: Uri): String? {
@@ -281,9 +281,9 @@ fun EditorScreen(
                         Button(
                             onClick = {
                                 val finalHtml = if (isHtmlMode) {
-                                    decodeHtmlEntities(contentHtmlTfv.text)
+                                    formatHtmlForEditor(decodeHtmlEntities(contentHtmlTfv.text))
                                 } else {
-                                    serializeStableBlocksToHtml(stableBlocks)
+                                    formatHtmlForEditor(serializeStableBlocksToHtml(stableBlocks))
                                 }
                                 viewModel.updateChapterContent(
                                     chapterId = chapterId,
@@ -433,7 +433,7 @@ fun EditorScreen(
                                     }
                                 } else {
                                     // Turning on HTML Mode -> HTML string
-                                    contentHtmlTfv = TextFieldValue(text = decodeHtmlEntities(serializeStableBlocksToHtml(stableBlocks)))
+                                    contentHtmlTfv = TextFieldValue(text = formatHtmlForEditor(decodeHtmlEntities(serializeStableBlocksToHtml(stableBlocks))))
                                 }
                                 activeBlockIndex = null
                                 activeRichTextState = null
@@ -685,17 +685,39 @@ fun serializeStableBlocksToHtml(blocks: List<EditorBlockState>): String {
     blocks.forEach { b ->
         if (b.isImage) {
             val file = File(b.localPath)
-            sb.append("<div style=\"text-align:center; margin:12px 0;\"><img src=\"${file.name}\" style=\"max-width:100%;\" /></div>\n")
+            sb.append("<div style=\"text-align:center; margin:12px 0;\"><img src=\"${file.name}\" style=\"max-width:100%;\" /></div>\n\n")
         } else {
             val html = decodeHtmlEntities(b.richTextState?.toHtml() ?: "").trim()
             if (html.isNotEmpty()) {
                 if (html.startsWith("<p>") || html.startsWith("<div>") || html.startsWith("<h")) {
-                    sb.append(html).append("\n")
+                    sb.append(html).append("\n\n")
                 } else {
-                    sb.append("<p>").append(html).append("</p>\n")
+                    sb.append("<p>").append(html).append("</p>\n\n")
                 }
             }
         }
     }
     return sb.toString().trim()
+}
+
+fun formatHtmlForEditor(html: String): String {
+    var formatted = html.trim()
+    
+    // 1. Add double-newline spacing between sequential paragraph/heading/div/blockquote tags
+    formatted = formatted.replace(Regex("</(p|div|h[1-6]|ul|ol|li|blockquote|section)>\\s*<(p|div|h[1-6]|ul|ol|li|blockquote|section|img|image|hr|div)", RegexOption.IGNORE_CASE)) { matchResult ->
+        val closingTag = matchResult.groupValues[1]
+        val openingTag = matchResult.groupValues[2]
+        "</$closingTag>\n\n<$openingTag"
+    }
+    
+    // 2. Also format if there's self-contained tags or tags like <br/> that might end paragraphs
+    formatted = formatted.replace(Regex("<br\\s*/?>\\s*<(p|div|h[1-6]|ul|ol|li|blockquote|section)", RegexOption.IGNORE_CASE)) { matchResult ->
+        val openingTag = matchResult.groupValues[1]
+        "<br />\n\n<$openingTag"
+    }
+    
+    // 3. Make sure we don't have three or more consecutive linebreaks
+    formatted = formatted.replace(Regex("\n{3,}"), "\n\n")
+
+    return formatted
 }
