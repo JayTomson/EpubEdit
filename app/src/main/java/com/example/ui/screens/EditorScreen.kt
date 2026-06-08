@@ -8,10 +8,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -20,7 +24,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -28,11 +34,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.util.WordStatsHelper
 import com.example.viewmodel.BookViewModel
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
+
+sealed class EditorBlock {
+    abstract val id: String
+    data class Text(val content: String, override val id: String = java.util.UUID.randomUUID().toString()) : EditorBlock()
+    data class Image(val fileName: String, val localPath: String, val rawTag: String, override val id: String = java.util.UUID.randomUUID().toString()) : EditorBlock()
+}
 
 fun decodeHtmlEntities(html: String): String {
     if (!html.contains('&')) return html
@@ -151,6 +164,81 @@ private fun trimHTMLAndPlain(input: String): String {
     return input.replace(Regex("<[^>]*>"), "").trim()
 }
 
+fun parseHtmlToEditorBlocks(html: String, context: android.content.Context): List<EditorBlock> {
+    val blocks = mutableListOf<EditorBlock>()
+    if (html.isBlank()) {
+        blocks.add(EditorBlock.Text(""))
+        return blocks
+    }
+    
+    // Regex matches <div...><img.../></div> or standalone <img.../> tags
+    val regex = Regex("(<div(?:\\s+[^>]*)*>\\s*)?<img\\s+[^>]*src=\"([^\"]+)\"[^>]*>(\\s*</div>)?", RegexOption.IGNORE_CASE)
+    
+    var lastIdx = 0
+    val matches = regex.findAll(html).toList()
+    
+    for (match in matches) {
+        val start = match.range.first
+        val end = match.range.last + 1
+        
+        if (start > lastIdx) {
+            val textBefore = html.substring(lastIdx, start)
+            val plain = htmlToPlainText(textBefore)
+            if (plain.isNotEmpty()) {
+                blocks.add(EditorBlock.Text(plain))
+            }
+        }
+        
+        val src = match.groupValues[2]
+        val rawTag = match.value
+        
+        val mediaDir = File(context.filesDir, "epub_media")
+        val imageFile = File(mediaDir, src)
+        val localPath = if (imageFile.exists()) imageFile.absolutePath else ""
+        
+        blocks.add(EditorBlock.Image(fileName = src, localPath = localPath, rawTag = rawTag))
+        lastIdx = end
+    }
+    
+    if (lastIdx < html.length) {
+        val textAfter = html.substring(lastIdx)
+        val plain = htmlToPlainText(textAfter)
+        if (plain.isNotEmpty()) {
+            blocks.add(EditorBlock.Text(plain))
+        }
+    }
+    
+    if (blocks.isEmpty()) {
+        blocks.add(EditorBlock.Text(""))
+    }
+    
+    return blocks
+}
+
+fun serializeEditorBlocksToHtml(
+    blocks: List<EditorBlock>,
+    blockTextFieldValues: Map<String, TextFieldValue>
+): String {
+    val sb = StringBuilder()
+    for (block in blocks) {
+        when (block) {
+            is EditorBlock.Text -> {
+                val latestText = blockTextFieldValues[block.id]?.text ?: block.content
+                if (latestText.isNotBlank()) {
+                    val valHtml = plainTextToHtml(latestText)
+                    if (valHtml.isNotEmpty() && valHtml != "<p></p>") {
+                        sb.append(valHtml).append("\n")
+                    }
+                }
+            }
+            is EditorBlock.Image -> {
+                sb.append(block.rawTag).append("\n")
+            }
+        }
+    }
+    return sb.toString().trim()
+}
+
 fun isCursorOnEmptyLine(tf: TextFieldValue): Boolean {
     if (!tf.selection.collapsed) return false
     val text = tf.text
@@ -172,7 +260,7 @@ fun isCursorOnEmptyLine(tf: TextFieldValue): Boolean {
     return lineText.trim().isEmpty()
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun EditorScreen(
     viewModel: BookViewModel,
@@ -197,82 +285,168 @@ fun EditorScreen(
 
     var chapterTitle by remember(currentChapter) { mutableStateOf(currentChapter.title) }
     
-    // Tracks editing mode (false = Visual/Plain Text, true = Raw HTML)
+    // Tracks editing mode (false = Visual/Plain Text blocks, true = Raw HTML)
     var isHtmlMode by remember { mutableStateOf(false) }
     
     // Is full screen mode active
     var isFullscreen by remember { mutableStateOf(false) }
 
-    // Text editor states
-    var visualTextState by remember(currentChapter) {
-        val pText = htmlToPlainText(currentChapter.contentHtml)
-        mutableStateOf(TextFieldValue(if (pText == "Введите текст вашей новой главы...") "" else pText))
-    }
+    // Unified blocks state in Visual mode
+    val editorBlocks = remember { mutableStateListOf<EditorBlock>() }
+    val blockTextFieldValues = remember { mutableStateMapOf<String, TextFieldValue>() }
+    var activeBlockIndex by remember { mutableStateOf<Int?>(null) }
     
+    // HTML Text editor state and Image delete states
     var htmlTextState by remember(currentChapter) {
         val raw = currentChapter.contentHtml
-        mutableStateOf(TextFieldValue(if (raw == "<p>Введите текст вашей новой главы...</p>") "" else raw))
+        mutableStateOf(TextFieldValue(if (raw == "<p>Введите...</p>" || raw.contains("Введите текст вашей новой главы")) "" else raw))
     }
-
+    
+    var imageToDeleteIndex by remember { mutableStateOf<Int?>(null) }
     var showUnsavedChangesDialog by remember { mutableStateOf(false) }
+
+    // Load initial blocks
+    LaunchedEffect(currentChapter) {
+        val parsed = parseHtmlToEditorBlocks(currentChapter.contentHtml, context)
+        editorBlocks.clear()
+        editorBlocks.addAll(parsed)
+        blockTextFieldValues.clear()
+        parsed.forEach { b ->
+            if (b is EditorBlock.Text) {
+                blockTextFieldValues[b.id] = TextFieldValue(b.content, androidx.compose.ui.text.TextRange(b.content.length))
+            }
+        }
+    }
 
     // Synchronize mode contents upon toggle
     val toggleMode = {
         if (isHtmlMode) {
-            // HTML to Plain Text conversion
-            val convertedText = htmlToPlainText(htmlTextState.text)
-            visualTextState = TextFieldValue(convertedText)
+            // HTML to Visual Blocks
+            val parsed = parseHtmlToEditorBlocks(htmlTextState.text, context)
+            editorBlocks.clear()
+            editorBlocks.addAll(parsed)
+            blockTextFieldValues.clear()
+            parsed.forEach { b ->
+                if (b is EditorBlock.Text) {
+                    blockTextFieldValues[b.id] = TextFieldValue(b.content, androidx.compose.ui.text.TextRange(b.content.length))
+                }
+            }
             isHtmlMode = false
         } else {
-            // Plain Text to HTML conversion
-            val convertedHtml = plainTextToHtml(visualTextState.text)
-            htmlTextState = TextFieldValue(convertedHtml)
+            // Visual Blocks to HTML
+            val convertedHtml = serializeEditorBlocksToHtml(editorBlocks, blockTextFieldValues)
+            htmlTextState = TextFieldValue(convertedHtml, androidx.compose.ui.text.TextRange(convertedHtml.length))
             isHtmlMode = true
         }
     }
 
     val currentContentText = {
-        if (isHtmlMode) htmlTextState.text else plainTextToHtml(visualTextState.text)
+        if (isHtmlMode) htmlTextState.text else serializeEditorBlocksToHtml(editorBlocks, blockTextFieldValues)
     }
 
     val applyFormatAction = { tagOpen: String, tagClose: String ->
-        val tf = if (isHtmlMode) htmlTextState else visualTextState
-        val text = tf.text
-        val selection = tf.selection
-        val newText: String
-        val newCursorIdx: Int
-        if (!selection.collapsed) {
-            val selectedText = text.substring(selection.start, selection.end)
-            newText = text.substring(0, selection.start) + tagOpen + selectedText + tagClose + text.substring(selection.end)
-            newCursorIdx = selection.start + tagOpen.length + selectedText.length + tagClose.length
-        } else {
-            val cursor = selection.start
-            newText = text.substring(0, cursor) + tagOpen + tagClose + text.substring(cursor)
-            newCursorIdx = cursor + tagOpen.length
-        }
-        val updatedTf = TextFieldValue(newText, androidx.compose.ui.text.TextRange(newCursorIdx))
         if (isHtmlMode) {
-            htmlTextState = updatedTf
+            val tf = htmlTextState
+            val text = tf.text
+            val selection = tf.selection
+            val newText: String
+            val newCursorIdx: Int
+            if (!selection.collapsed) {
+                val selectedText = text.substring(selection.start, selection.end)
+                newText = text.substring(0, selection.start) + tagOpen + selectedText + tagClose + text.substring(selection.end)
+                newCursorIdx = selection.start + tagOpen.length + selectedText.length + tagClose.length
+            } else {
+                val cursor = selection.start
+                newText = text.substring(0, cursor) + tagOpen + tagClose + text.substring(cursor)
+                newCursorIdx = cursor + tagOpen.length
+            }
+            htmlTextState = TextFieldValue(newText, androidx.compose.ui.text.TextRange(newCursorIdx))
         } else {
-            visualTextState = updatedTf
+            // Apply formatting to currently focused Visual Text block
+            val focusedIdx = activeBlockIndex ?: 0
+            if (focusedIdx >= 0 && focusedIdx < editorBlocks.size) {
+                val block = editorBlocks[focusedIdx]
+                if (block is EditorBlock.Text) {
+                    val tf = blockTextFieldValues[block.id] ?: TextFieldValue(block.content)
+                    val text = tf.text
+                    val selection = tf.selection
+                    val newText: String
+                    val newCursorIdx: Int
+                    if (!selection.collapsed) {
+                        val selectedText = text.substring(selection.start, selection.end)
+                        newText = text.substring(0, selection.start) + tagOpen + selectedText + tagClose + text.substring(selection.end)
+                        newCursorIdx = selection.start + tagOpen.length + selectedText.length + tagClose.length
+                    } else {
+                        val cursor = selection.start
+                        newText = text.substring(0, cursor) + tagOpen + tagClose + text.substring(cursor)
+                        newCursorIdx = cursor + tagOpen.length
+                    }
+                    val updatedTf = TextFieldValue(newText, androidx.compose.ui.text.TextRange(newCursorIdx))
+                    blockTextFieldValues[block.id] = updatedTf
+                    editorBlocks[focusedIdx] = EditorBlock.Text(newText, block.id)
+                }
+            }
         }
     }
 
     val imagePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
-            val tf = if (isHtmlMode) htmlTextState else visualTextState
-            if (!isCursorOnEmptyLine(tf)) {
-                Toast.makeText(context, "Иллюстрацию можно вставить только на пустую строку!", Toast.LENGTH_LONG).show()
-                return@let
-            }
             val cachedPath = saveIllustrationLocally(context, it)
             if (cachedPath != null) {
                 val fileName = File(cachedPath).name
-                val imgTag = "\n<div style=\"text-align:center; margin:12px 0;\"><img src=\"$fileName\" style=\"max-width:100%;\" /></div>\n"
-                applyFormatAction(imgTag, "")
+                val imgTag = "<div style=\"text-align:center; margin:12px 0;\"><img src=\"$fileName\" style=\"max-width:100%;\" /></div>"
+                
+                if (isHtmlMode) {
+                    val tf = htmlTextState
+                    val text = tf.text
+                    val selection = tf.selection
+                    val doubleNewLineTag = "\n" + imgTag + "\n"
+                    val newText = text.substring(0, selection.start) + doubleNewLineTag + text.substring(selection.end)
+                    htmlTextState = TextFieldValue(newText, androidx.compose.ui.text.TextRange(selection.start + doubleNewLineTag.length))
+                } else {
+                    // Split the text block at the empty cursor line
+                    val focusedIdx = activeBlockIndex ?: 0
+                    if (focusedIdx >= 0 && focusedIdx < editorBlocks.size) {
+                        val block = editorBlocks[focusedIdx]
+                        if (block is EditorBlock.Text) {
+                            val tf = blockTextFieldValues[block.id] ?: TextFieldValue(block.content)
+                            val text = tf.text
+                            val cursor = tf.selection.start
+                            
+                            val textBefore = text.substring(0, cursor).trimEnd('\n')
+                            val textAfter = text.substring(cursor).trimStart('\n')
+                            
+                            editorBlocks.removeAt(focusedIdx)
+                            
+                            var insertPosition = focusedIdx
+                            if (textBefore.isNotEmpty()) {
+                                editorBlocks.add(insertPosition, EditorBlock.Text(textBefore, block.id))
+                                blockTextFieldValues[block.id] = TextFieldValue(textBefore, androidx.compose.ui.text.TextRange(textBefore.length))
+                                insertPosition++
+                            }
+                            
+                            val imgBlock = EditorBlock.Image(fileName = fileName, localPath = cachedPath, rawTag = imgTag)
+                            editorBlocks.add(insertPosition, imgBlock)
+                            insertPosition++
+                            
+                            val afterBlock = EditorBlock.Text(textAfter)
+                            editorBlocks.add(insertPosition, afterBlock)
+                            blockTextFieldValues[afterBlock.id] = TextFieldValue(textAfter, androidx.compose.ui.text.TextRange(0))
+                            
+                            activeBlockIndex = insertPosition
+                        }
+                    } else {
+                        // Just append
+                        val imgBlock = EditorBlock.Image(fileName = fileName, localPath = cachedPath, rawTag = imgTag)
+                        editorBlocks.add(imgBlock)
+                        val afterBlock = EditorBlock.Text("")
+                        editorBlocks.add(afterBlock)
+                        blockTextFieldValues[afterBlock.id] = TextFieldValue("")
+                    }
+                }
                 Toast.makeText(context, "Иллюстрация добавлена", Toast.LENGTH_SHORT).show()
             } else {
-                Toast.makeText(context, "Ошибка сохранения", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Ошибка сохранения иллюстрации", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -295,6 +469,7 @@ fun EditorScreen(
         }
     }
 
+    // Unsaved changes warning
     if (showUnsavedChangesDialog) {
         AlertDialog(
             onDismissRequest = { showUnsavedChangesDialog = false },
@@ -311,6 +486,54 @@ fun EditorScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showUnsavedChangesDialog = false }) {
+                    Text("Отмена", color = MaterialTheme.colorScheme.outline)
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    }
+
+    // Image Deletion dialog
+    if (imageToDeleteIndex != null) {
+        AlertDialog(
+            onDismissRequest = { imageToDeleteIndex = null },
+            title = { Text("Удалить иллюстрацию?") },
+            text = { Text("Вы действительно хотите удалить эту иллюстрацию из главы?") },
+            confirmButton = {
+                val idx = imageToDeleteIndex!!
+                if (idx >= 0 && idx < editorBlocks.size) {
+                    val prevIdx = idx - 1
+                    val nextIdx = idx + 1
+                    if (prevIdx >= 0 && nextIdx < editorBlocks.size && 
+                        editorBlocks[prevIdx] is EditorBlock.Text && 
+                        editorBlocks[nextIdx] is EditorBlock.Text) {
+                        
+                        val prevBlock = editorBlocks[prevIdx] as EditorBlock.Text
+                        val nextBlock = editorBlocks[nextIdx] as EditorBlock.Text
+                        
+                        val prevText = prevBlock.content
+                        val nextText = nextBlock.content
+                        
+                        val mergedText = if (prevText.isEmpty()) nextText else if (nextText.isEmpty()) prevText else prevText + "\n" + nextText
+                        
+                        editorBlocks[prevIdx] = EditorBlock.Text(mergedText, prevBlock.id)
+                        blockTextFieldValues[prevBlock.id] = TextFieldValue(mergedText, androidx.compose.ui.text.TextRange(prevText.length))
+                        
+                        editorBlocks.removeAt(nextIdx)
+                        editorBlocks.removeAt(idx)
+                    } else {
+                        editorBlocks.removeAt(idx)
+                    }
+                    
+                    if (editorBlocks.isEmpty()) {
+                        editorBlocks.add(EditorBlock.Text(""))
+                    }
+                }
+                imageToDeleteIndex = null
+                Toast.makeText(context, "Иллюстрация удалена", Toast.LENGTH_SHORT).show()
+            },
+            dismissButton = {
+                TextButton(onClick = { imageToDeleteIndex = null }) {
                     Text("Отмена", color = MaterialTheme.colorScheme.outline)
                 }
             },
@@ -355,7 +578,6 @@ fun EditorScreen(
                 modifier = Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.ime)
             ) {
                 Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-                    // Row of rich styling actions
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -381,7 +603,21 @@ fun EditorScreen(
                                 Icon(Icons.Default.Segment, "Абзац")
                             }
                             IconButton(onClick = {
-                                val tf = if (isHtmlMode) htmlTextState else visualTextState
+                                val tf = if (isHtmlMode) {
+                                    htmlTextState
+                                } else {
+                                    val idx = activeBlockIndex ?: 0
+                                    if (idx >= 0 && idx < editorBlocks.size) {
+                                        val block = editorBlocks[idx]
+                                        if (block is EditorBlock.Text) {
+                                            blockTextFieldValues[block.id] ?: TextFieldValue(block.content)
+                                        } else {
+                                            TextFieldValue("")
+                                        }
+                                    } else {
+                                        TextFieldValue("")
+                                    }
+                                }
                                 if (!isCursorOnEmptyLine(tf)) {
                                     Toast.makeText(context, "Иллюстрацию можно вставить только на пустую строку!", Toast.LENGTH_LONG).show()
                                 } else {
@@ -392,7 +628,6 @@ fun EditorScreen(
                             }
                         }
                         
-                        // Fullscreen / Exit Fullscreen Button
                         IconButton(onClick = { isFullscreen = !isFullscreen }) {
                             Icon(
                                 if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen, 
@@ -404,7 +639,6 @@ fun EditorScreen(
                     
                     Spacer(modifier = Modifier.height(8.dp))
                     
-                    // Toggle Switch Button between normal editing and HTML code
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -452,7 +686,6 @@ fun EditorScreen(
                             }
                         }
                         
-                        // Save quick access if fullscreen
                         if (isFullscreen) {
                             Button(
                                 onClick = { performSave() },
@@ -497,12 +730,12 @@ fun EditorScreen(
                     fontWeight = FontWeight.Bold, 
                     color = if (isHtmlMode) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.secondary
                 )
-                val totalWords = WordStatsHelper.countWords(if (isHtmlMode) htmlTextState.text else visualTextState.text)
+                val totalWords = WordStatsHelper.countWords(currentContentText())
                 Text("Слов: $totalWords", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline, fontWeight = FontWeight.Medium)
             }
             Spacer(modifier = Modifier.height(6.dp))
             
-            // Clean text editor sheet
+            // Clean text editor container
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -519,40 +752,115 @@ fun EditorScreen(
                     )
                     .padding(12.dp)
             ) {
-                OutlinedTextField(
-                    value = if (isHtmlMode) htmlTextState else visualTextState,
-                    onValueChange = {
-                        if (isHtmlMode) htmlTextState = it else visualTextState = it
-                    },
-                    textStyle = if (isHtmlMode) {
-                        TextStyle(
+                if (isHtmlMode) {
+                    OutlinedTextField(
+                        value = htmlTextState,
+                        onValueChange = { htmlTextState = it },
+                        textStyle = TextStyle(
                             fontFamily = FontFamily.Monospace,
                             fontSize = 14.sp,
                             color = Color(0xFFE2E2E2)
-                        )
-                    } else {
-                        TextStyle(
-                            fontFamily = FontFamily.SansSerif,
-                            fontSize = 16.sp,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            lineHeight = 24.sp
-                        )
-                    },
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
-                        disabledContainerColor = Color.Transparent,
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent
-                    ),
-                    modifier = Modifier.fillMaxSize(),
-                    placeholder = {
-                        Text(
-                            if (isHtmlMode) "<h2>Заголовок</h2>\n<p>Введите HTML код...</p>" else "Введите текст здесь...",
-                            color = if (isHtmlMode) Color.Gray else MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
-                        )
+                        ),
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent,
+                            disabledContainerColor = Color.Transparent,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent
+                        ),
+                        modifier = Modifier.fillMaxSize(),
+                        placeholder = {
+                            Text(
+                                "<h2>Заголовок</h2>\n<p>Введите HTML код...</p>",
+                                color = Color.Gray
+                            )
+                        }
+                    )
+                } else {
+                    // Visual Blocks List rendering text fields and images inline
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        itemsIndexed(editorBlocks) { index, block ->
+                            when (block) {
+                                is EditorBlock.Text -> {
+                                    val tfValue = blockTextFieldValues.getOrPut(block.id) {
+                                        TextFieldValue(block.content, androidx.compose.ui.text.TextRange(block.content.length))
+                                    }
+                                    OutlinedTextField(
+                                        value = tfValue,
+                                        onValueChange = { newVal ->
+                                            blockTextFieldValues[block.id] = newVal
+                                            editorBlocks[index] = EditorBlock.Text(newVal.text, block.id)
+                                        },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .onFocusChanged { focusState ->
+                                                if (focusState.isFocused) {
+                                                    activeBlockIndex = index
+                                                }
+                                            },
+                                        textStyle = TextStyle(
+                                            fontFamily = FontFamily.SansSerif,
+                                            fontSize = 16.sp,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            lineHeight = 24.sp
+                                        ),
+                                        colors = TextFieldDefaults.colors(
+                                            focusedContainerColor = Color.Transparent,
+                                            unfocusedContainerColor = Color.Transparent,
+                                            disabledContainerColor = Color.Transparent,
+                                            focusedIndicatorColor = Color.Transparent,
+                                            unfocusedIndicatorColor = Color.Transparent
+                                        ),
+                                        placeholder = {
+                                            Text(
+                                                "Введите текст здесь...",
+                                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
+                                            )
+                                        }
+                                    )
+                                }
+                                is EditorBlock.Image -> {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 12.dp)
+                                            .border(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                                            .background(Color.Black.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                                            .combinedClickable(
+                                                onLongClick = {
+                                                    imageToDeleteIndex = index
+                                                },
+                                                onClick = {}
+                                            )
+                                    ) {
+                                        AsyncImage(
+                                            model = "file://${block.localPath}",
+                                            contentDescription = "Иллюстрация главы",
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(max = 280.dp)
+                                                .align(Alignment.Center),
+                                            contentScale = ContentScale.Fit
+                                        )
+                                        
+                                        // Visual hints
+                                        Badge(
+                                            containerColor = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier
+                                                .align(Alignment.BottomEnd)
+                                                .padding(8.dp)
+                                        ) {
+                                            Text("Зажмите для удаления", color = Color.White, fontSize = 10.sp, modifier = Modifier.padding(2.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
-                )
+                }
             }
         }
     }
