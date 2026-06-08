@@ -14,6 +14,8 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -30,7 +32,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -40,6 +48,7 @@ import com.example.util.ContentBlock
 import com.example.util.EpubProcessor
 import com.example.util.WordStatsHelper
 import com.example.viewmodel.BookViewModel
+import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
 
@@ -183,15 +192,17 @@ fun EditorScreen(
     // Visual Rich block list of sequential text and image nodes
     val editorBlocks = remember(currentChapter) {
         val initialHtml = if (currentChapter.contentHtml == "<p>Введите текст вашей новой главы...</p>") "" else currentChapter.contentHtml
-        val parsed = EpubProcessor.parseContentIntoBlocks(context, initialHtml, currentChapter.titleId, currentChapter.title).toMutableStateList()
-        if (parsed.isEmpty()) {
-            parsed.add(ContentBlock.Text(""))
+        val parsed = EpubProcessor.parseContentIntoBlocks(context, initialHtml, currentChapter.titleId, currentChapter.title)
+        val merged = mergeTextBlocks(parsed).toMutableStateList()
+        if (merged.isEmpty()) {
+            merged.add(ContentBlock.Text(""))
         }
-        parsed
+        merged
     }
 
     var isHtmlMode by remember { mutableStateOf(false) } // False: Visual format, True: HTML raw edit
     var isFocusMode by remember { mutableStateOf(false) } // Distraction-free focus writing mode
+    var showEpubTagsDialog by remember { mutableStateOf(false) } // Show popup dialog with all EPUB tags
 
     // For supporting visual rich formatting helper actions (cursor placement or appends)
     var activeBlockIndex by remember { mutableStateOf<Int?>(null) }
@@ -260,7 +271,6 @@ fun EditorScreen(
         onActiveChange: (Boolean) -> Unit
     ) {
         val idx = activeBlockIndex ?: return
-        val block = editorBlocks.getOrNull(idx) as? ContentBlock.Text ?: return
         val tf = activeTextFieldValue
         val text = tf.text
         val selection = tf.selection
@@ -278,7 +288,6 @@ fun EditorScreen(
                 selection = androidx.compose.ui.text.TextRange(newSelectionStart)
             )
             activeTextFieldValue = newTf
-            editorBlocks[idx] = ContentBlock.Text(plainTextToHtml(newText), block.id)
         } else {
             // Single cursor active toggled typing style
             if (isActive) {
@@ -308,7 +317,6 @@ fun EditorScreen(
                     selection = androidx.compose.ui.text.TextRange(cursor + tagOpen.length)
                 )
                 activeTextFieldValue = newTf
-                editorBlocks[idx] = ContentBlock.Text(plainTextToHtml(newText), block.id)
                 onActiveChange(true)
             }
         }
@@ -364,7 +372,6 @@ fun EditorScreen(
                             }
                             val newTf = TextFieldValue(newText, androidx.compose.ui.text.TextRange(newCursor))
                             activeTextFieldValue = newTf
-                            editorBlocks[idx] = ContentBlock.Text(plainTextToHtml(newText), block.id)
                         }
                     }
                 }
@@ -594,12 +601,12 @@ fun EditorScreen(
                         }
 
                         IconButton(
-                            onClick = { applyFormatAction("<p>", "</p>") },
+                            onClick = { showEpubTagsDialog = true },
                             colors = IconButtonDefaults.iconButtonColors(
                                 contentColor = MaterialTheme.colorScheme.primary
                             )
                         ) {
-                            Icon(imageVector = Icons.Default.Notes, contentDescription = "Абзац")
+                            Icon(imageVector = Icons.Default.PostAdd, contentDescription = "Все XHTML теги")
                         }
 
                         // Illustration Picker Trigger Button (Next to standard formatting buttons)
@@ -653,12 +660,19 @@ fun EditorScreen(
                                 if (isHtmlMode) {
                                     // Turning off HTML Mode: parse contentHtml into editorBlocks
                                     editorBlocks.clear()
-                                    editorBlocks.addAll(EpubProcessor.parseContentIntoBlocks(context, contentHtml, currentChapter.titleId, currentChapter.title))
+                                    val parsed = EpubProcessor.parseContentIntoBlocks(context, contentHtml, currentChapter.titleId, currentChapter.title)
+                                    editorBlocks.addAll(mergeTextBlocks(parsed))
                                     if (editorBlocks.isEmpty()) {
                                         editorBlocks.add(ContentBlock.Text(""))
                                     }
                                 } else {
                                     // Turning on HTML Mode: serialize editorBlocks into contentHtml
+                                    if (activeBlockIndex != null) {
+                                        val idx = activeBlockIndex!!
+                                        if (idx in editorBlocks.indices && editorBlocks[idx] is ContentBlock.Text) {
+                                            editorBlocks[idx] = ContentBlock.Text(wrapInParagraphIfNeeded(activeTextFieldValue.text), editorBlocks[idx].id)
+                                        }
+                                    }
                                     contentHtml = serializeBlocksToHtml(editorBlocks)
                                 }
                                 isHtmlMode = !isHtmlMode
@@ -696,12 +710,17 @@ fun EditorScreen(
             }
         }
     ) { innerPadding ->
+        val listState = rememberLazyListState()
+        val coroutineScope = rememberCoroutineScope()
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .imePadding()
         ) {
             LazyColumn(
+                state = listState,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(16.dp),
@@ -770,7 +789,7 @@ fun EditorScreen(
                             when (block) {
                                 is ContentBlock.Text -> {
                                     val cleanText = remember(block.id) {
-                                        htmlToPlainText(block.htmlText)
+                                        paragraphHtmlToVisualEditorText(block.htmlText)
                                     }
 
                                     var tfValue by remember(block.id) {
@@ -779,44 +798,68 @@ fun EditorScreen(
 
                                     val isFocused = activeBlockIndex == index
 
-                                    // Keep tfValue and activeTextFieldValue in sync if focused
+                                    // Keep tfValue and activeTextFieldValue in sync if focused and text actually changed (e.g. from styling buttons)
                                     if (isFocused && activeTextFieldValue.text != tfValue.text) {
                                         tfValue = activeTextFieldValue
                                     }
 
-                                    OutlinedTextField(
-                                        value = if (isFocused) activeTextFieldValue else tfValue,
+                                    TextField(
+                                        value = tfValue,
                                         onValueChange = { newValue ->
                                             tfValue = newValue
                                             if (isFocused) {
                                                 activeTextFieldValue = newValue
+                                                editorBlocks[index] = ContentBlock.Text(wrapInParagraphIfNeeded(newValue.text), block.id)
+                                                isBoldActive = isStyleActiveAtCursor(newValue.text, newValue.selection.start, "b")
+                                                isItalicActive = isStyleActiveAtCursor(newValue.text, newValue.selection.start, "i")
+                                                isUnderlineActive = isStyleActiveAtCursor(newValue.text, newValue.selection.start, "u")
                                             }
-                                            // Save to blocks in real time for word counts and seamless updates
-                                            editorBlocks[index] = ContentBlock.Text(plainTextToHtml(newValue.text), block.id)
                                         },
-                                        placeholder = { Text("Введите text абзаца...") },
+                                        placeholder = {
+                                            Text(
+                                                text = "Введите текст главы...",
+                                                style = TextStyle(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+                                            )
+                                        },
                                         textStyle = TextStyle(
                                             fontSize = 16.sp,
                                             color = MaterialTheme.colorScheme.onSurface,
                                             lineHeight = 26.sp
                                         ),
-                                        minLines = 3,
+                                        visualTransformation = remember { HtmlVisualTransformation() },
+                                        colors = TextFieldDefaults.colors(
+                                            focusedContainerColor = Color.Transparent,
+                                            unfocusedContainerColor = Color.Transparent,
+                                            disabledContainerColor = Color.Transparent,
+                                            errorContainerColor = Color.Transparent,
+                                            focusedIndicatorColor = Color.Transparent,
+                                            unfocusedIndicatorColor = Color.Transparent,
+                                            disabledIndicatorColor = Color.Transparent,
+                                            errorIndicatorColor = Color.Transparent,
+                                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface
+                                        ),
                                         modifier = Modifier
                                             .fillMaxWidth()
+                                            .heightIn(min = if (index == editorBlocks.indices.lastOrNull { editorBlocks[it] is ContentBlock.Text }) 300.dp else 100.dp)
                                             .onFocusChanged { focusState ->
                                                 if (focusState.isFocused) {
                                                     activeBlockIndex = index
                                                     activeTextFieldValue = tfValue
-                                                    // Reset styling active modes on changing block focus
-                                                    isBoldActive = false
-                                                    isItalicActive = false
-                                                    isUnderlineActive = false
+                                                    // Synchronize active style toggle states based on current selection cursor
+                                                    isBoldActive = isStyleActiveAtCursor(tfValue.text, tfValue.selection.start, "b")
+                                                    isItalicActive = isStyleActiveAtCursor(tfValue.text, tfValue.selection.start, "i")
+                                                    isUnderlineActive = isStyleActiveAtCursor(tfValue.text, tfValue.selection.start, "u")
+
+                                                    coroutineScope.launch {
+                                                        listState.animateScrollToItem(index)
+                                                    }
                                                 } else {
                                                     if (activeBlockIndex == index) {
                                                         tfValue = activeTextFieldValue
-                                                        editorBlocks[index] = ContentBlock.Text(plainTextToHtml(activeTextFieldValue.text), block.id)
+                                                        editorBlocks[index] = ContentBlock.Text(wrapInParagraphIfNeeded(activeTextFieldValue.text), block.id)
                                                     } else {
-                                                        editorBlocks[index] = ContentBlock.Text(plainTextToHtml(tfValue.text), block.id)
+                                                        editorBlocks[index] = ContentBlock.Text(wrapInParagraphIfNeeded(tfValue.text), block.id)
                                                     }
                                                 }
                                             }
@@ -904,28 +947,9 @@ fun EditorScreen(
                                                 Button(
                                                     onClick = {
                                                         editorBlocks.removeAt(index)
-                                                        
-                                                        // Post-deletion: merge adjacent ContentBlock.Text items
-                                                        val mergedList = mutableListOf<ContentBlock>()
-                                                        for (b in editorBlocks) {
-                                                            if (mergedList.isNotEmpty() && mergedList.last() is ContentBlock.Text && b is ContentBlock.Text) {
-                                                                val lastText = (mergedList.last() as ContentBlock.Text).htmlText
-                                                                val currentText = b.htmlText
-                                                                val combined = if (lastText.trim().isEmpty()) {
-                                                                    currentText
-                                                                } else if (currentText.trim().isEmpty()) {
-                                                                    lastText
-                                                                } else {
-                                                                    "$lastText\n$currentText"
-                                                                }
-                                                                // Keep the ID of the first text item to avoid focus/state rebuild
-                                                                mergedList[mergedList.lastIndex] = ContentBlock.Text(combined, mergedList.last().id)
-                                                            } else {
-                                                                mergedList.add(b)
-                                                            }
-                                                        }
+                                                        val merged = mergeTextBlocks(editorBlocks)
                                                         editorBlocks.clear()
-                                                        editorBlocks.addAll(mergedList)
+                                                        editorBlocks.addAll(merged)
                                                         if (editorBlocks.isEmpty()) {
                                                             editorBlocks.add(ContentBlock.Text(""))
                                                         }
@@ -958,7 +982,7 @@ fun EditorScreen(
                 }
 
                 item {
-                    Spacer(modifier = Modifier.height(80.dp))
+                    Spacer(modifier = Modifier.height(350.dp))
                 }
             }
 
@@ -975,7 +999,27 @@ fun EditorScreen(
                     shape = RoundedCornerShape(20.dp),
                     elevation = CardDefaults.cardElevation(4.dp)
                 ) {
-                    val statsText = if (isHtmlMode) contentHtml else serializeBlocksToHtml(editorBlocks)
+                    val statsText = remember(editorBlocks, activeBlockIndex, activeTextFieldValue, isHtmlMode, contentHtml) {
+                        if (isHtmlMode) {
+                            contentHtml
+                        } else {
+                            val sb = StringBuilder()
+                            editorBlocks.forEachIndexed { idx, b ->
+                                if (activeBlockIndex == idx && b is ContentBlock.Text) {
+                                    sb.append(wrapInParagraphIfNeeded(activeTextFieldValue.text)).append("\n")
+                                } else {
+                                    when (b) {
+                                        is ContentBlock.Text -> sb.append(b.htmlText).append("\n")
+                                        is ContentBlock.Image -> {
+                                            val file = File(b.localPath)
+                                            sb.append("<img src=\"${file.name}\" />\n")
+                                        }
+                                    }
+                                }
+                            }
+                            sb.toString()
+                        }
+                    }
                     Row(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1017,6 +1061,117 @@ fun EditorScreen(
                         }
                     }
                 }
+            }
+
+            if (showEpubTagsDialog) {
+                AlertDialog(
+                    onDismissRequest = { showEpubTagsDialog = false },
+                    title = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "EPUB XHTML Теги",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    },
+                    text = {
+                        Box(modifier = Modifier.heightIn(max = 350.dp)) {
+                            LazyColumn(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                item {
+                                    Text(
+                                        text = "Выберите тег для вставки на позиции курсора:",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.outline,
+                                        modifier = Modifier.padding(bottom = 8.dp)
+                                    )
+                                }
+                                
+                                val tagsList = listOf(
+                                    EpubTagOption("<b> ... </b>", "Жирный текст", "<b>", "</b>", Icons.Default.FormatBold),
+                                    EpubTagOption("<i> ... </i>", "Курсивный текст", "<i>", "</i>", Icons.Default.FormatItalic),
+                                    EpubTagOption("<u> ... </u>", "Подчеркнутый текст", "<u>", "</u>", Icons.Default.FormatUnderlined),
+                                    EpubTagOption("<p> ... </p>", "Параграф / Абзац", "<p>", "</p>", Icons.Default.Edit),
+                                    EpubTagOption("<h2> ... </h2>", "Крупный заголовок", "<h2>", "</h2>", Icons.Default.Star),
+                                    EpubTagOption("<h3> ... </h3>", "Подзаголовок", "<h3>", "</h3>", Icons.Default.Star),
+                                    EpubTagOption("<blockquote> ... </blockquote>", "Блок цитаты / Эпиграф", "<blockquote style=\"font-style: italic; margin: 10px 20px;\">", "</blockquote>", Icons.Default.Info),
+                                    EpubTagOption("Center align", "Выравнивание по центру", "<div style=\"text-align: center;\">", "</div>", Icons.Default.Menu),
+                                    EpubTagOption("Justify align", "Выравнивание по ширине", "<div style=\"text-align: justify;\">", "</div>", Icons.Default.List),
+                                    EpubTagOption("<sup> ... </sup>", "Верхний индекс / Сноска", "<sup style=\"font-size: 0.75em; vertical-align: super;\">", "</sup>", Icons.Default.KeyboardArrowUp),
+                                    EpubTagOption("<sub> ... </sub>", "Нижний индекс", "<sub style=\"font-size: 0.75em; vertical-align: sub;\">", "</sub>", Icons.Default.KeyboardArrowDown),
+                                    EpubTagOption("Small Caps", "Капитель (малые прописные)", "<span style=\"font-variant: small-caps;\">", "</span>", Icons.Default.Edit),
+                                    EpubTagOption("Monospace", "Моноширинный текст / Код", "<pre style=\"font-family: monospace; background: #2d2d2d; padding: 4dp;\">", "</pre>", Icons.Default.Code),
+                                    EpubTagOption("Разделитель <hr/>", "Горизонтальная линия spacer", "<hr/>", "", Icons.Default.Minimize),
+                                    EpubTagOption("Цветной текст", "Выделение акцентным фиолетовым", "<span style=\"color: #BB86FC;\">", "</span>", Icons.Default.Star)
+                                )
+
+                                items(tagsList) { option ->
+                                    Card(
+                                        onClick = {
+                                            applyFormatAction(option.tagOpen, option.tagClose)
+                                            showEpubTagsDialog = false
+                                        },
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                                        ),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(12.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = option.icon,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.secondary,
+                                                modifier = Modifier.size(24.dp)
+                                            )
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = option.label,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Text(
+                                                    text = option.desc,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.outline
+                                                )
+                                            }
+                                            Icon(
+                                                imageVector = Icons.Default.KeyboardArrowRight,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.outline
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { showEpubTagsDialog = false }) {
+                            Text("Закрыть")
+                        }
+                    },
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    shape = RoundedCornerShape(24.dp)
+                )
             }
         }
     }
@@ -1089,21 +1244,14 @@ fun plainTextToHtml(plainText: String): String {
 }
 
 fun serializeBlocksToHtml(blocks: List<ContentBlock>): String {
-    val sb = StringBuilder()
+    val sb = java.lang.StringBuilder()
     blocks.forEach { block ->
         when (block) {
             is ContentBlock.Text -> {
-                val text = block.htmlText.trim()
-                if (text.isNotEmpty()) {
-                    if (text.startsWith("<p>") || text.startsWith("<div>") || text.startsWith("<h")) {
-                        sb.append(text).append("\n")
-                    } else {
-                        text.split("\n").forEach { line ->
-                            val trimmedLine = line.trim()
-                            if (trimmedLine.isNotEmpty()) {
-                                sb.append("<p>").append(trimmedLine).append("</p>\n")
-                            }
-                        }
+                val cleanText = paragraphHtmlToVisualEditorText(block.htmlText)
+                if (cleanText.isNotEmpty()) {
+                    cleanText.split("\n").forEach { line ->
+                        sb.append("<p>").append(line.trim()).append("</p>\n")
                     }
                 }
             }
@@ -1114,4 +1262,181 @@ fun serializeBlocksToHtml(blocks: List<ContentBlock>): String {
         }
     }
     return sb.toString().trim()
+}
+
+fun mergeTextBlocks(blocks: List<ContentBlock>): List<ContentBlock> {
+    val merged = mutableListOf<ContentBlock>()
+    var currentTextBuilder = java.lang.StringBuilder()
+    for (block in blocks) {
+        when (block) {
+            is ContentBlock.Text -> {
+                val clean = paragraphHtmlToVisualEditorText(block.htmlText)
+                if (clean.isNotEmpty()) {
+                    if (currentTextBuilder.isNotEmpty()) {
+                        currentTextBuilder.append("\n")
+                    }
+                    currentTextBuilder.append(clean)
+                }
+            }
+            is ContentBlock.Image -> {
+                if (currentTextBuilder.isNotEmpty()) {
+                    merged.add(ContentBlock.Text("<p>${currentTextBuilder.toString()}</p>"))
+                    currentTextBuilder = java.lang.StringBuilder()
+                }
+                merged.add(block)
+            }
+        }
+    }
+    if (currentTextBuilder.isNotEmpty()) {
+        merged.add(ContentBlock.Text("<p>${currentTextBuilder.toString()}</p>"))
+    }
+    return merged
+}
+
+data class EpubTagOption(
+    val label: String,
+    val desc: String,
+    val tagOpen: String,
+    val tagClose: String,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector
+)
+
+fun wrapInParagraphIfNeeded(text: String): String {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return ""
+    if (trimmed.startsWith("<p>") && trimmed.endsWith("</p>")) {
+        return trimmed
+    }
+    val lower = trimmed.lowercase()
+    if (lower.startsWith("<p ") || lower.startsWith("<div") || lower.startsWith("<h") || lower.startsWith("<blockquote") || lower.startsWith("<pre")) {
+        return trimmed
+    }
+    return "<p>$trimmed</p>"
+}
+
+fun paragraphHtmlToVisualEditorText(html: String): String {
+    var raw = html.trim()
+    if (raw.startsWith("<p>") && raw.endsWith("</p>")) {
+        raw = raw.substring(3, raw.length - 4)
+    } else if (raw.startsWith("<div>") && raw.endsWith("</div>")) {
+        raw = raw.substring(5, raw.length - 6)
+    }
+    return raw
+}
+
+fun isStyleActiveAtCursor(text: String, cursor: Int, tag: String): Boolean {
+    var openCount = 0
+    var closeCount = 0
+    var i = 0
+    val tagOpen = "<$tag"
+    val tagClose = "</$tag>"
+    while (i < cursor && i < text.length) {
+        if (text.startsWith(tagOpen, i)) {
+            openCount++
+            i += tagOpen.length
+        } else if (text.startsWith(tagClose, i)) {
+            closeCount++
+            i += tagClose.length
+        } else {
+            i++
+        }
+    }
+    return openCount > closeCount
+}
+
+private data class TagState(val tag: String, val startVisual: Int)
+
+class HtmlVisualTransformation : VisualTransformation {
+    override fun filter(text: AnnotatedString): TransformedText {
+        val original = text.text
+        val visualBuilder = StringBuilder()
+        val styles = mutableListOf<AnnotatedString.Range<SpanStyle>>()
+        
+        var i = 0
+        val originalToVisual = IntArray(original.length + 1)
+        val visualToOriginal = mutableListOf<Int>()
+        
+        val activeStyles = mutableListOf<TagState>()
+        
+        while (i < original.length) {
+            if (original[i] == '<') {
+                val closeBracketIdx = original.indexOf('>', i)
+                if (closeBracketIdx != -1) {
+                    val tagContent = original.substring(i + 1, closeBracketIdx).trim()
+                    val isClose = tagContent.startsWith("/")
+                    val cleanTagContent = if (isClose) tagContent.substring(1).trim() else tagContent
+                    val tagName = cleanTagContent.split(Regex("\\s+"))[0].lowercase()
+                    
+                    if (tagName in listOf("b", "strong", "i", "em", "u", "s", "strike")) {
+                        val visualPos = visualBuilder.length
+                        if (isClose) {
+                            val matchIdx = activeStyles.indexOfLast { it.tag == tagName }
+                            if (matchIdx != -1) {
+                                val state = activeStyles.removeAt(matchIdx)
+                                val endVisual = visualPos
+                                if (endVisual > state.startVisual) {
+                                    val spanStyle = when (tagName) {
+                                        "b", "strong" -> SpanStyle(fontWeight = FontWeight.Bold)
+                                        "i", "em" -> SpanStyle(fontStyle = FontStyle.Italic)
+                                        "u" -> SpanStyle(textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline)
+                                        "s", "strike" -> SpanStyle(textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough)
+                                        else -> SpanStyle()
+                                    }
+                                    styles.add(AnnotatedString.Range(spanStyle, state.startVisual, endVisual))
+                                }
+                            }
+                        } else {
+                            activeStyles.add(TagState(tagName, visualPos))
+                        }
+                    }
+                    
+                    for (k in i..closeBracketIdx) {
+                        originalToVisual[k] = visualBuilder.length
+                    }
+                    i = closeBracketIdx + 1
+                    continue
+                }
+            }
+            
+            originalToVisual[i] = visualBuilder.length
+            visualToOriginal.add(i)
+            visualBuilder.append(original[i])
+            i++
+        }
+        originalToVisual[original.length] = visualBuilder.length
+        visualToOriginal.add(original.length)
+        
+        activeStyles.forEach { state ->
+            val endVisual = visualBuilder.length
+            if (endVisual > state.startVisual) {
+                val spanStyle = when (state.tag) {
+                    "b", "strong" -> SpanStyle(fontWeight = FontWeight.Bold)
+                    "i", "em" -> SpanStyle(fontStyle = FontStyle.Italic)
+                    "u" -> SpanStyle(textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline)
+                    "s", "strike" -> SpanStyle(textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough)
+                    else -> SpanStyle()
+                }
+                styles.add(AnnotatedString.Range(spanStyle, state.startVisual, endVisual))
+            }
+        }
+        
+        val annotatedVisual = AnnotatedString(
+            text = visualBuilder.toString(),
+            spanStyles = styles
+        )
+        
+        val offsetMapping = object : OffsetMapping {
+            override fun originalToTransformed(offset: Int): Int {
+                val clamped = offset.coerceIn(0, original.length)
+                return originalToVisual[clamped]
+            }
+
+            override fun transformedToOriginal(offset: Int): Int {
+                val clamped = offset.coerceIn(0, visualToOriginal.lastIndex)
+                return visualToOriginal[clamped]
+            }
+        }
+        
+        return TransformedText(annotatedVisual, offsetMapping)
+    }
 }

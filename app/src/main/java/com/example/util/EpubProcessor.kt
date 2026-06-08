@@ -1433,7 +1433,10 @@ object EpubProcessor {
             if (img.start > lastIdx) {
                 val intermediateText = cleanedHtml.substring(lastIdx, img.start).trim()
                 if (intermediateText.isNotEmpty()) {
-                    blocks.add(ContentBlock.Text(intermediateText))
+                    val innerBlocks = splitHtmlIntoBlocks(intermediateText)
+                    innerBlocks.forEach { blockText ->
+                        blocks.add(ContentBlock.Text(blockText))
+                    }
                 }
             }
             
@@ -1450,11 +1453,37 @@ object EpubProcessor {
         if (lastIdx < cleanedHtml.length) {
             val remainingText = cleanedHtml.substring(lastIdx).trim()
             if (remainingText.isNotEmpty()) {
-                blocks.add(ContentBlock.Text(remainingText))
+                val innerBlocks = splitHtmlIntoBlocks(remainingText)
+                innerBlocks.forEach { blockText ->
+                    blocks.add(ContentBlock.Text(blockText))
+                }
             }
         }
         
         return blocks
+    }
+
+    private fun splitHtmlIntoBlocks(htmlText: String): List<String> {
+        val result = mutableListOf<String>()
+        val blockRegex = Regex("<(p|div|h1|h2|h3|h4|h5|h6|blockquote|pre)(?:\\s+[^>]*)?>.*?</\\1>|<hr\\s*/?>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+        var lastIdx = 0
+        blockRegex.findAll(htmlText).forEach { match ->
+            if (match.range.first > lastIdx) {
+                val intermediate = htmlText.substring(lastIdx, match.range.first).trim()
+                if (intermediate.isNotEmpty()) {
+                    result.add(intermediate)
+                }
+            }
+            result.add(match.value)
+            lastIdx = match.range.last + 1
+        }
+        if (lastIdx < htmlText.length) {
+            val remaining = htmlText.substring(lastIdx).trim()
+            if (remaining.isNotEmpty()) {
+                result.add(remaining)
+            }
+        }
+        return result
     }
 }
 
