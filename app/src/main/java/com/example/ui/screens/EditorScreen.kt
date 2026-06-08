@@ -40,6 +40,7 @@ import coil.compose.AsyncImage
 import com.example.util.ContentBlock
 import com.example.util.EpubProcessor
 import com.example.util.WordStatsHelper
+import com.example.util.cleanHtmlForParser
 import com.example.viewmodel.BookViewModel
 import com.mohamedrejeb.richeditor.model.RichTextState
 import com.mohamedrejeb.richeditor.ui.material3.RichTextEditor
@@ -198,7 +199,7 @@ fun EditorScreen(
             when (b) {
                 is ContentBlock.Text -> {
                     val s = RichTextState()
-                    s.setHtml(b.htmlText)
+                    s.setHtml(cleanHtmlForParser(b.htmlText))
                     EditorBlockState(id = b.id, isImage = false, richTextState = s)
                 }
                 is ContentBlock.Image -> {
@@ -420,7 +421,7 @@ fun EditorScreen(
                                     parsed.forEach { b ->
                                         if (b is ContentBlock.Text) {
                                             val s = RichTextState()
-                                            s.setHtml(b.htmlText)
+                                            s.setHtml(cleanHtmlForParser(b.htmlText))
                                             stableBlocks.add(EditorBlockState(id = b.id, isImage = false, richTextState = s))
                                         } else if (b is ContentBlock.Image) {
                                             stableBlocks.add(EditorBlockState(id = b.id, isImage = true, localPath = b.localPath))

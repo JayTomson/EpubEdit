@@ -1401,7 +1401,7 @@ object EpubProcessor {
         titleId: Long? = null, 
         chapterTitle: String? = null
     ): List<ContentBlock> {
-        val cleanedHtml = html
+        val cleanedHtml = cleanHtmlForParser(html)
             .replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
             .replace(Regex("<style(?:\\s+[^>]*)?>.*?</style>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
             .replace(Regex("<script(?:\\s+[^>]*)?>.*?</script>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
@@ -1462,5 +1462,21 @@ sealed class ContentBlock {
     abstract val id: String
     data class Text(val htmlText: String, override val id: String = java.util.UUID.randomUUID().toString()) : ContentBlock()
     data class Image(val localPath: String, override val id: String = java.util.UUID.randomUUID().toString()) : ContentBlock()
+}
+
+fun cleanHtmlForParser(html: String): String {
+    var cleaned = html.trim()
+    // Strip empty lines/whitespace specifically between sibling block tags to prevent parser failure
+    cleaned = cleaned.replace(Regex("</(p|div|h[1-6]|ul|ol|li|blockquote|section)>\\s*<(p|div|h[1-6]|ul|ol|li|blockquote|section|img|image|hr|div)", RegexOption.IGNORE_CASE)) { matchResult ->
+        val closingTag = matchResult.groupValues[1]
+        val openingTag = matchResult.groupValues[2]
+        "</$closingTag><$openingTag"
+    }
+    // Also remove newlines inside <p> or general tags that might have been added by spacing
+    cleaned = cleaned.replace(Regex("<br\\s*/?>\\s*\\n+\\s*<(p|div|h[1-6]|ul|ol|li|blockquote|section)", RegexOption.IGNORE_CASE)) { matchResult ->
+        val openingTag = matchResult.groupValues[1]
+        "<br /><$openingTag"
+    }
+    return cleaned
 }
 
