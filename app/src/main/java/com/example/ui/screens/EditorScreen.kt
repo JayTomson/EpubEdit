@@ -141,7 +141,7 @@ fun EditorScreen(
             if (index != null && index in editorBlocks.indices && !isHtmlMode) {
                 val state = activeRichTextState
                 if (state != null) {
-                    val text = state.toText()
+                    val text = state.annotatedString.text
                     // Selection handling in RichTextState
                     val selection = state.selection
                     val cursor = selection.start
@@ -161,7 +161,7 @@ fun EditorScreen(
                             // we'll just insert image in the block if possible, or split block.
                             // However, splitting RichText state HTML by index is tough.
                             // The easiest way is to convert RichText back to HTML, and just use EpubProcessor to parse it again!
-                            val finalHtmlOfBlock = unescapeHtmlEntities(state.toHtml())
+                            val finalHtmlOfBlock = decodeCyrillicFromHtmlEntities(state.toHtml())
                             
                             // Splitting block logic simply by inserting image block. 
                             editorBlocks.removeAt(index)
@@ -219,7 +219,7 @@ fun EditorScreen(
                                     val idx = activeBlockIndex!!
                                     val state = activeRichTextState
                                     if (idx in editorBlocks.indices && editorBlocks[idx] is ContentBlock.Text && state != null) {
-                                        editorBlocks[idx] = ContentBlock.Text(unescapeHtmlEntities(state.toHtml()), editorBlocks[idx].id)
+                                        editorBlocks[idx] = ContentBlock.Text(state.toHtml(), editorBlocks[idx].id)
                                     }
                                 }
                                 val finalHtml = if (isHtmlMode) contentHtmlTfv.text else serializeBlocksToHtml(editorBlocks)
@@ -364,7 +364,7 @@ fun EditorScreen(
                                         val idx = activeBlockIndex!!
                                         val state = activeRichTextState
                                         if (idx in editorBlocks.indices && editorBlocks[idx] is ContentBlock.Text && state != null) {
-                                            editorBlocks[idx] = ContentBlock.Text(unescapeHtmlEntities(state.toHtml()), editorBlocks[idx].id)
+                                            editorBlocks[idx] = ContentBlock.Text(decodeCyrillicFromHtmlEntities(state.toHtml()), editorBlocks[idx].id)
                                         }
                                     }
                                     contentHtmlTfv = TextFieldValue(text = serializeBlocksToHtml(editorBlocks))
@@ -498,7 +498,7 @@ fun EditorScreen(
                                             } else {
                                                 // Save immediately on focus lost
                                                 if (activeBlockIndex == index) {
-                                                    editorBlocks[index] = ContentBlock.Text(unescapeHtmlEntities(state.toHtml()), block.id)
+                                                    editorBlocks[index] = ContentBlock.Text(decodeCyrillicFromHtmlEntities(state.toHtml()), block.id)
                                                 }
                                             }
                                         },
@@ -658,6 +658,33 @@ fun htmlToPlainText(html: String): String {
         .replace("&quot;", "\"")
         .replace("&apos;", "'")
     return clean.trim()
+}
+
+fun decodeCyrillicFromHtmlEntities(html: String): String {
+    val cyrillicMap = mapOf(
+        "&Acy;" to "А", "&acy;" to "а", "&Bcy;" to "Б", "&bcy;" to "б",
+        "&Vcy;" to "В", "&vcy;" to "в", "&Gcy;" to "Г", "&gcy;" to "г",
+        "&Dcy;" to "Д", "&dcy;" to "д", "&Iecy;" to "Е", "&iecy;" to "е",
+        "&Yocy;" to "Ё", "&yocy;" to "ё", "&Zhcy;" to "Ж", "&zhcy;" to "ж",
+        "&Zcy;" to "З", "&zcy;" to "з", "&Icy;" to "И", "&icy;" to "и",
+        "&Jcy;" to "Й", "&jcy;" to "й", "&Kcy;" to "К", "&kcy;" to "к",
+        "&Lcy;" to "Л", "&lcy;" to "л", "&Mcy;" to "М", "&mcy;" to "м",
+        "&Ncy;" to "Н", "&ncy;" to "н", "&Ocy;" to "О", "&ocy;" to "о",
+        "&Pcy;" to "П", "&pcy;" to "п", "&Rcy;" to "Р", "&rcy;" to "р",
+        "&Scy;" to "С", "&scy;" to "с", "&Tcy;" to "Т", "&tcy;" to "т",
+        "&Ucy;" to "У", "&ucy;" to "у", "&Fcy;" to "Ф", "&fcy;" to "ф",
+        "&Hcy;" to "Х", "&hcy;" to "х", "&Ccy;" to "Ц", "&ccy;" to "ц",
+        "&Chcy;" to "Ч", "&chcy;" to "ч", "&Shcy;" to "Ш", "&shcy;" to "ш",
+        "&Shhcy;" to "Щ", "&shhcy;" to "щ", "&Hardcy;" to "Ъ", "&hardcy;" to "ъ",
+        "&Ycy;" to "Ы", "&ycy;" to "ы", "&Softcy;" to "Ь", "&softcy;" to "ь",
+        "&Ecy;" to "Э", "&ecy;" to "э", "&Yucy;" to "Ю", "&yucy;" to "ю",
+        "&Yacy;" to "Я", "&yacy;" to "я", "&numero;" to "№"
+    )
+    var decoded = html
+    for ((entity, char) in cyrillicMap) {
+        decoded = decoded.replace(entity, char)
+    }
+    return decoded
 }
 
 fun plainTextToHtml(plainText: String): String {
