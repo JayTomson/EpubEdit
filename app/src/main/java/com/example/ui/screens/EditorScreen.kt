@@ -164,7 +164,11 @@ private fun trimHTMLAndPlain(input: String): String {
     return input.replace(Regex("<[^>]*>"), "").trim()
 }
 
-fun parseHtmlToEditorBlocks(html: String, context: android.content.Context): List<EditorBlock> {
+fun parseHtmlToEditorBlocks(
+    html: String,
+    context: android.content.Context,
+    titleId: Long? = null
+): List<EditorBlock> {
     val blocks = mutableListOf<EditorBlock>()
     if (html.isBlank()) {
         blocks.add(EditorBlock.Text(""))
@@ -192,9 +196,15 @@ fun parseHtmlToEditorBlocks(html: String, context: android.content.Context): Lis
         val src = match.groupValues[2]
         val rawTag = match.value
         
-        val mediaDir = File(context.filesDir, "epub_media")
-        val imageFile = File(mediaDir, src)
-        val localPath = if (imageFile.exists()) imageFile.absolutePath else ""
+        // Resolve path via EpubProcessor
+        val resolvedPath = com.example.util.EpubProcessor.resolveLocalImagePath(context, src, titleId)
+        val localPath = if (resolvedPath != null) {
+            resolvedPath
+        } else {
+            val mediaDir = File(context.filesDir, "epub_media")
+            val imageFile = File(mediaDir, src)
+            if (imageFile.exists()) imageFile.absolutePath else ""
+        }
         
         blocks.add(EditorBlock.Image(fileName = src, localPath = localPath, rawTag = rawTag))
         lastIdx = end
@@ -307,7 +317,7 @@ fun EditorScreen(
 
     // Load initial blocks
     LaunchedEffect(currentChapter) {
-        val parsed = parseHtmlToEditorBlocks(currentChapter.contentHtml, context)
+        val parsed = parseHtmlToEditorBlocks(currentChapter.contentHtml, context, currentChapter.titleId)
         editorBlocks.clear()
         editorBlocks.addAll(parsed)
         blockTextFieldValues.clear()
@@ -322,7 +332,7 @@ fun EditorScreen(
     val toggleMode = {
         if (isHtmlMode) {
             // HTML to Visual Blocks
-            val parsed = parseHtmlToEditorBlocks(htmlTextState.text, context)
+            val parsed = parseHtmlToEditorBlocks(htmlTextState.text, context, currentChapter.titleId)
             editorBlocks.clear()
             editorBlocks.addAll(parsed)
             blockTextFieldValues.clear()
@@ -500,37 +510,43 @@ fun EditorScreen(
             title = { Text("Удалить иллюстрацию?") },
             text = { Text("Вы действительно хотите удалить эту иллюстрацию из главы?") },
             confirmButton = {
-                val idx = imageToDeleteIndex!!
-                if (idx >= 0 && idx < editorBlocks.size) {
-                    val prevIdx = idx - 1
-                    val nextIdx = idx + 1
-                    if (prevIdx >= 0 && nextIdx < editorBlocks.size && 
-                        editorBlocks[prevIdx] is EditorBlock.Text && 
-                        editorBlocks[nextIdx] is EditorBlock.Text) {
-                        
-                        val prevBlock = editorBlocks[prevIdx] as EditorBlock.Text
-                        val nextBlock = editorBlocks[nextIdx] as EditorBlock.Text
-                        
-                        val prevText = prevBlock.content
-                        val nextText = nextBlock.content
-                        
-                        val mergedText = if (prevText.isEmpty()) nextText else if (nextText.isEmpty()) prevText else prevText + "\n" + nextText
-                        
-                        editorBlocks[prevIdx] = EditorBlock.Text(mergedText, prevBlock.id)
-                        blockTextFieldValues[prevBlock.id] = TextFieldValue(mergedText, androidx.compose.ui.text.TextRange(prevText.length))
-                        
-                        editorBlocks.removeAt(nextIdx)
-                        editorBlocks.removeAt(idx)
-                    } else {
-                        editorBlocks.removeAt(idx)
+                TextButton(
+                    onClick = {
+                        val idx = imageToDeleteIndex!!
+                        if (idx >= 0 && idx < editorBlocks.size) {
+                            val prevIdx = idx - 1
+                            val nextIdx = idx + 1
+                            if (prevIdx >= 0 && nextIdx < editorBlocks.size && 
+                                editorBlocks[prevIdx] is EditorBlock.Text && 
+                                editorBlocks[nextIdx] is EditorBlock.Text) {
+                                
+                                val prevBlock = editorBlocks[prevIdx] as EditorBlock.Text
+                                val nextBlock = editorBlocks[nextIdx] as EditorBlock.Text
+                                
+                                val prevText = prevBlock.content
+                                val nextText = nextBlock.content
+                                
+                                val mergedText = if (prevText.isEmpty()) nextText else if (nextText.isEmpty()) prevText else prevText + "\n" + nextText
+                                
+                                editorBlocks[prevIdx] = EditorBlock.Text(mergedText, prevBlock.id)
+                                blockTextFieldValues[prevBlock.id] = TextFieldValue(mergedText, androidx.compose.ui.text.TextRange(prevText.length))
+                                
+                                editorBlocks.removeAt(nextIdx)
+                                editorBlocks.removeAt(idx)
+                            } else {
+                                editorBlocks.removeAt(idx)
+                            }
+                            
+                            if (editorBlocks.isEmpty()) {
+                                editorBlocks.add(EditorBlock.Text(""))
+                            }
+                        }
+                        imageToDeleteIndex = null
+                        Toast.makeText(context, "Иллюстрация удалена", Toast.LENGTH_SHORT).show()
                     }
-                    
-                    if (editorBlocks.isEmpty()) {
-                        editorBlocks.add(EditorBlock.Text(""))
-                    }
+                ) {
+                    Text("Удалить", color = MaterialTheme.colorScheme.error)
                 }
-                imageToDeleteIndex = null
-                Toast.makeText(context, "Иллюстрация удалена", Toast.LENGTH_SHORT).show()
             },
             dismissButton = {
                 TextButton(onClick = { imageToDeleteIndex = null }) {
@@ -823,12 +839,13 @@ fun EditorScreen(
                                     )
                                 }
                                 is EditorBlock.Image -> {
+                                    val isImageValid = block.localPath.isNotEmpty() && File(block.localPath).exists()
                                     Box(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .padding(vertical = 12.dp)
-                                            .border(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
-                                            .background(Color.Black.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
+                                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
+                                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
                                             .combinedClickable(
                                                 onLongClick = {
                                                     imageToDeleteIndex = index
@@ -836,24 +853,89 @@ fun EditorScreen(
                                                 onClick = {}
                                             )
                                     ) {
-                                        AsyncImage(
-                                            model = "file://${block.localPath}",
-                                            contentDescription = "Иллюстрация главы",
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .heightIn(max = 280.dp)
-                                                .align(Alignment.Center),
-                                            contentScale = ContentScale.Fit
-                                        )
+                                        if (isImageValid) {
+                                            AsyncImage(
+                                                model = File(block.localPath),
+                                                contentDescription = "Иллюстрация главы",
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .heightIn(max = 280.dp)
+                                                    .align(Alignment.Center)
+                                                    .padding(8.dp),
+                                                contentScale = ContentScale.Fit
+                                            )
+                                        } else {
+                                            // Fallback/Error state beautifully styled
+                                            Column(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(24.dp),
+                                                horizontalAlignment = Alignment.CenterHorizontally,
+                                                verticalArrangement = Arrangement.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.BrokenImage,
+                                                    contentDescription = "Ошибка загрузки изображения",
+                                                    tint = MaterialTheme.colorScheme.error,
+                                                    modifier = Modifier.size(48.dp)
+                                                )
+                                                Spacer(modifier = Modifier.height(8.dp))
+                                                Text(
+                                                    "Изображение не найдено локально",
+                                                    color = MaterialTheme.colorScheme.error,
+                                                    fontSize = 13.sp,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Text(
+                                                    block.fileName,
+                                                    color = MaterialTheme.colorScheme.outline,
+                                                    fontSize = 11.sp,
+                                                    fontFamily = FontFamily.Monospace
+                                                )
+                                            }
+                                        }
                                         
-                                        // Visual hints
-                                        Badge(
-                                            containerColor = MaterialTheme.colorScheme.primary,
+                                        // Trash delete button overlay at the top right
+                                        IconButton(
+                                            onClick = {
+                                                imageToDeleteIndex = index
+                                            },
                                             modifier = Modifier
-                                                .align(Alignment.BottomEnd)
-                                                .padding(8.dp)
+                                                .align(Alignment.TopEnd)
+                                                .padding(6.dp)
+                                                .background(
+                                                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.9f),
+                                                    shape = RoundedCornerShape(8.dp)
+                                                )
+                                                .size(36.dp)
                                         ) {
-                                            Text("Зажмите для удаления", color = Color.White, fontSize = 10.sp, modifier = Modifier.padding(2.dp))
+                                            Icon(
+                                                imageVector = Icons.Default.Delete,
+                                                contentDescription = "Удалить иллюстрацию",
+                                                tint = MaterialTheme.colorScheme.onErrorContainer,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                        
+                                        // Information Badge at the bottom start or bottom end
+                                        Box(
+                                            modifier = Modifier
+                                                .align(Alignment.BottomStart)
+                                                .padding(8.dp)
+                                                .background(
+                                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f),
+                                                    shape = RoundedCornerShape(4.dp)
+                                                )
+                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        ) {
+                                            val shortName = File(block.fileName).name
+                                            Text(
+                                                "Файл: $shortName",
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Medium
+                                            )
                                         }
                                     }
                                 }
