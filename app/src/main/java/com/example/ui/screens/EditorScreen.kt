@@ -42,7 +42,7 @@ import com.example.util.EpubProcessor
 import com.example.util.WordStatsHelper
 import com.example.viewmodel.BookViewModel
 import com.mohamedrejeb.richeditor.model.RichTextState
-import com.mohamedrejeb.richeditor.ui.material3.OutlinedRichTextEditor
+import com.mohamedrejeb.richeditor.ui.material3.RichTextEditor
 import com.mohamedrejeb.richeditor.ui.material3.RichTextEditorDefaults
 import java.io.File
 import java.io.FileOutputStream
@@ -55,24 +55,104 @@ class EditorBlockState(
 )
 
 /**
- * Cleanly decodes HTML entity strings like &YAcy; or &period; / &comma; into normal Unicode characters.
- * Keeps standard markup/structural entities like &lt;, &gt;, &amp;, &quot;, &apos;, and &nbsp; intact
- * to prevent parsing or HTML injection side-effects.
+ * Cleanly decodes HTML entity strings (including Cyrillic characters and advanced punctuation)
+ * into normal Unicode characters, keeping standard HTML structural entities intact.
  */
 fun decodeHtmlEntities(html: String): String {
     if (!html.contains('&')) return html
-    val regex = Regex("&[a-zA-Z0-9#]+;")
+    
+    val customDecoderMap = mapOf(
+        "Acy" to "А", "acy" to "а",
+        "Bcy" to "Б", "bcy" to "б",
+        "Vcy" to "В", "vcy" to "в",
+        "Gcy" to "Г", "gcy" to "г",
+        "Dcy" to "Д", "dcy" to "д",
+        "IEcy" to "Е", "iecy" to "е",
+        "IOcy" to "Ё", "iocy" to "ё",
+        "ZHcy" to "Ж", "zhcy" to "ж",
+        "Zcy" to "З", "zcy" to "з",
+        "Icy" to "И", "icy" to "и",
+        "Jcy" to "Й", "jcy" to "й",
+        "Kcy" to "К", "kcy" to "к",
+        "Lcy" to "Л", "lcy" to "л",
+        "Mcy" to "М", "mcy" to "м",
+        "Ncy" to "Н", "ncy" to "н",
+        "Ocy" to "О", "ocy" to "о",
+        "Pcy" to "П", "pcy" to "п",
+        "Rcy" to "Р", "rcy" to "р",
+        "Scy" to "С", "scy" to "с",
+        "Tcy" to "Т", "tcy" to "т",
+        "Ucy" to "У", "ucy" to "у",
+        "Fcy" to "Ф", "fcy" to "ф",
+        "KHcy" to "Х", "khcy" to "х",
+        "TScy" to "Ц", "tscy" to "ц",
+        "CHcy" to "Ч", "chcy" to "ч",
+        "SHcy" to "Ш", "shcy" to "ш",
+        "SHCHcy" to "Щ", "shchcy" to "щ",
+        "SHHcy" to "Щ", "shhcy" to "щ",
+        "HARDcy" to "Ъ", "hardcy" to "ъ",
+        "Ycy" to "Ы", "ycy" to "ы",
+        "SOFTcy" to "Ь", "softcy" to "ь",
+        "Ecy" to "Э", "ecy" to "э",
+        "YUcy" to "Ю", "yucy" to "ю",
+        "YAcy" to "Я", "yacy" to "я",
+        
+        "Iukcy" to "І", "iukcy" to "і",
+        "YEcy" to "Є", "yecy" to "є",
+        "YIcy" to "Ї", "yicy" to "ї",
+        "Ubrcy" to "Ў", "ubrcy" to "ў",
+        "Ggcy" to "Ґ", "ggcy" to "ґ",
+        "djcy" to "ђ", "DJcy" to "Ђ",
+        "gjcy" to "ѓ", "GJcy" to "Ѓ",
+        "jsercy" to "ј", "Jsercy" to "Ј",
+        "ljcy" to "љ", "LJcy" to "Љ",
+        "njcy" to "њ", "NJcy" to "Њ",
+        "tshcy" to "ћ", "TSHcy" to "Ћ",
+        "dzcy" to "џ", "DZcy" to "Џ",
+        "dscy" to "ѕ", "DScy" to "Ѕ",
+        
+        "period" to ".", "comma" to ",", "lpar" to "(", "rpar" to ")",
+        "excl" to "!", "quest" to "?", "colon" to ":", "semi" to ";",
+        "apos" to "'", "quot" to "\"", "sol" to "/", "bsol" to "\\",
+        "lowbar" to "_", "lcub" to "{", "rcub" to "}", "lbrack" to "[",
+        "rbrack" to "]", "ast" to "*", "num" to "#", "percnt" to "%",
+        "plus" to "+", "equals" to "=", "dollar" to "$", "commat" to "@",
+        "Hat" to "^", "tilde" to "~", "nbsp" to " ", "mdash" to "—",
+        "ndash" to "–", "laquo" to "«", "raquo" to "»", "ldquo" to "“",
+        "rdquo" to "”", "lsquo" to "‘", "rsquo" to "’", "hellip" to "...",
+        "bull" to "•", "middot" to "·"
+    )
+
+    val regex = Regex("&([a-zA-Z0-9#x]+);")
     return regex.replace(html) { matchResult ->
-        val entity = matchResult.value
-        val lower = entity.lowercase()
-        if (lower == "&lt;" || lower == "&gt;" || lower == "&amp;" || lower == "&quot;" || lower == "&apos;" || lower == "&nbsp;") {
-            entity
-        } else {
+        val entityBody = matchResult.groupValues[1]
+        
+        val mappedValue = customDecoderMap[entityBody]
+        if (mappedValue != null) {
+            mappedValue
+        } else if (entityBody.startsWith("#")) {
             try {
-                val decoded = android.text.Html.fromHtml(entity, android.text.Html.FROM_HTML_MODE_LEGACY).toString()
-                if (decoded.isNotEmpty()) decoded else entity
+                val isHex = entityBody.startsWith("#x", ignoreCase = true)
+                val code = if (isHex) {
+                    entityBody.substring(2).toInt(16)
+                } else {
+                    entityBody.substring(1).toInt()
+                }
+                code.toChar().toString()
             } catch (e: Exception) {
-                entity
+                matchResult.value
+            }
+        } else {
+            val lower = entityBody.lowercase()
+            if (lower == "lt" || lower == "gt" || lower == "amp" || lower == "quot" || lower == "apos" || lower == "nbsp") {
+                matchResult.value
+            } else {
+                try {
+                    val decoded = android.text.Html.fromHtml("&" + entityBody + ";", android.text.Html.FROM_HTML_MODE_LEGACY).toString()
+                    if (decoded.isNotEmpty() && decoded != "&" + entityBody + ";") decoded else matchResult.value
+                } catch (e: Exception) {
+                    matchResult.value
+                }
             }
         }
     }
@@ -524,7 +604,7 @@ fun EditorScreen(
                         } else {
                             val state = block.richTextState
                             if (state != null) {
-                                OutlinedRichTextEditor(
+                                RichTextEditor(
                                     state = state,
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -534,17 +614,15 @@ fun EditorScreen(
                                                 activeRichTextState = state
                                             }
                                         },
-                                    label = { Text("Текст главы") },
-                                    shape = RoundedCornerShape(12.dp),
                                     textStyle = TextStyle(
-                                        fontSize = 16.sp,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        lineHeight = 26.sp
+                                        fontSize = 18.sp,
+                                        color = MaterialTheme.colorScheme.onBackground,
+                                        lineHeight = 28.sp
                                     ),
-                                    colors = RichTextEditorDefaults.outlinedRichTextEditorColors(
-                                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-                                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f)
+                                    colors = RichTextEditorDefaults.richTextEditorColors(
+                                        focusedIndicatorColor = Color.Transparent,
+                                        unfocusedIndicatorColor = Color.Transparent,
+                                        containerColor = Color.Transparent
                                     )
                                 )
                             }
