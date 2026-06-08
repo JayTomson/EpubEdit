@@ -74,9 +74,9 @@ fun EditorScreen(
 
     // Local mutable state fields synchronized on load
     var chapterTitle by remember(currentChapter) { mutableStateOf(currentChapter.title) }
-    var contentHtml by remember(currentChapter) { 
+    var contentHtmlTfv by remember(currentChapter) { 
         val html = currentChapter.contentHtml
-        mutableStateOf(if (html == "<p>Введите текст вашей новой главы...</p>") "" else html) 
+        mutableStateOf(TextFieldValue(if (html == "<p>Введите текст вашей новой главы...</p>") "" else html)) 
     }
 
     // Visual Rich block list of sequential text and image nodes
@@ -239,7 +239,7 @@ fun EditorScreen(
                                         editorBlocks[idx] = ContentBlock.Text(activeTextFieldValue.text, editorBlocks[idx].id)
                                     }
                                 }
-                                val finalHtml = if (isHtmlMode) contentHtml else serializeBlocksToHtml(editorBlocks)
+                                val finalHtml = if (isHtmlMode) contentHtmlTfv.text else serializeBlocksToHtml(editorBlocks)
                                 viewModel.updateChapterContent(
                                     chapterId = chapterId,
                                     title = chapterTitle.trim(),
@@ -275,26 +275,20 @@ fun EditorScreen(
                 elevation = CardDefaults.cardElevation(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                val activeText = if (isHtmlMode) {
-                    contentHtml
+                val activeTextTfv = if (isHtmlMode) {
+                    contentHtmlTfv
                 } else {
-                    val idx = activeBlockIndex
-                    if (idx != null && idx in editorBlocks.indices) {
-                        (editorBlocks[idx] as? ContentBlock.Text)?.htmlText ?: ""
-                    } else {
-                        ""
-                    }
+                    activeTextFieldValue
                 }
 
-                val updateActiveText = { newText: String ->
+                val updateActiveTextField = { transform: (TextFieldValue) -> TextFieldValue ->
                     if (isHtmlMode) {
-                        contentHtml = newText
+                        contentHtmlTfv = transform(contentHtmlTfv)
                     } else {
                         val idx = activeBlockIndex
                         if (idx != null && idx in editorBlocks.indices) {
                             if (editorBlocks[idx] is ContentBlock.Text) {
-                                editorBlocks[idx] = ContentBlock.Text(newText, editorBlocks[idx].id)
-                                activeTextFieldValue = activeTextFieldValue.copy(text = newText)
+                                activeTextFieldValue = transform(activeTextFieldValue)
                             }
                         }
                     }
@@ -313,7 +307,7 @@ fun EditorScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         IconButton(
-                            onClick = { updateActiveText(insertHtmlTag(activeText, "<b>", "</b>")) },
+                            onClick = { updateActiveTextField { insertHtmlTag(it, "<b>", "</b>") } },
                             colors = IconButtonDefaults.iconButtonColors(
                                 contentColor = MaterialTheme.colorScheme.primary
                             )
@@ -322,7 +316,7 @@ fun EditorScreen(
                         }
 
                         IconButton(
-                            onClick = { updateActiveText(insertHtmlTag(activeText, "<i>", "</i>")) },
+                            onClick = { updateActiveTextField { insertHtmlTag(it, "<i>", "</i>") } },
                             colors = IconButtonDefaults.iconButtonColors(
                                 contentColor = MaterialTheme.colorScheme.primary
                             )
@@ -331,7 +325,7 @@ fun EditorScreen(
                         }
 
                         IconButton(
-                            onClick = { updateActiveText(insertHtmlTag(activeText, "<u>", "</u>")) },
+                            onClick = { updateActiveTextField { insertHtmlTag(it, "<u>", "</u>") } },
                             colors = IconButtonDefaults.iconButtonColors(
                                 contentColor = MaterialTheme.colorScheme.primary
                             )
@@ -340,7 +334,7 @@ fun EditorScreen(
                         }
 
                         IconButton(
-                            onClick = { updateActiveText(insertHtmlTag(activeText, "<p>", "</p>")) },
+                            onClick = { updateActiveTextField { insertHtmlTag(it, "<p>", "</p>") } },
                             colors = IconButtonDefaults.iconButtonColors(
                                 contentColor = MaterialTheme.colorScheme.primary
                             )
@@ -395,13 +389,13 @@ fun EditorScreen(
                                 if (isHtmlMode) {
                                     // Turning off HTML Mode: parse contentHtml into editorBlocks
                                     editorBlocks.clear()
-                                    editorBlocks.addAll(EpubProcessor.parseContentIntoBlocks(context, contentHtml, currentChapter.titleId, currentChapter.title))
+                                    editorBlocks.addAll(EpubProcessor.parseContentIntoBlocks(context, contentHtmlTfv.text, currentChapter.titleId, currentChapter.title))
                                     if (editorBlocks.isEmpty()) {
                                         editorBlocks.add(ContentBlock.Text(""))
                                     }
                                 } else {
                                     // Turning on HTML Mode: serialize editorBlocks into contentHtml
-                                    contentHtml = serializeBlocksToHtml(editorBlocks)
+                                    contentHtmlTfv = TextFieldValue(text = serializeBlocksToHtml(editorBlocks))
                                 }
                                 isHtmlMode = !isHtmlMode
                             },
@@ -435,6 +429,8 @@ fun EditorScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .consumeWindowInsets(innerPadding)
+                .imePadding()
         ) {
             LazyColumn(
                 modifier = Modifier
@@ -479,8 +475,30 @@ fun EditorScreen(
                     item {
                         // Advanced Code-Editor Style Raw Html inputs
                         OutlinedTextField(
-                            value = contentHtml,
-                            onValueChange = { contentHtml = it },
+                            value = contentHtmlTfv,
+                            onValueChange = { newValue -> 
+                                var finalValue = newValue
+                                val newText = newValue.text
+                                val oldText = contentHtmlTfv.text
+                                // Auto closing tags logic when user types '>'
+                                if (newText.length == oldText.length + 1) {
+                                    val cursor = newValue.selection.start
+                                    if (cursor > 0 && newText[cursor - 1] == '>') {
+                                        val textBeforeCursor = newText.substring(0, cursor)
+                                        val tagMatch = Regex("<([a-zA-Z0-9]+)>$").find(textBeforeCursor)
+                                        if (tagMatch != null) {
+                                            val tag = tagMatch.groupValues[1]
+                                            val closeTag = "</$tag>"
+                                            val withCloseTag = newText.substring(0, cursor) + closeTag + newText.substring(cursor)
+                                            finalValue = TextFieldValue(
+                                                text = withCloseTag,
+                                                selection = androidx.compose.ui.text.TextRange(cursor)
+                                            )
+                                        }
+                                    }
+                                }
+                                contentHtmlTfv = finalValue
+                            },
                             placeholder = { Text("<p>Напишите содержание главы здесь...</p>") },
                             textStyle = TextStyle(
                                 fontFamily = FontFamily.Monospace,
@@ -517,13 +535,19 @@ fun EditorScreen(
 
                                     val isFocused = activeBlockIndex == index
 
+                                    LaunchedEffect(activeTextFieldValue) {
+                                        if (isFocused && activeTextFieldValue.text != tfValue.text) {
+                                            tfValue = activeTextFieldValue
+                                            editorBlocks[index] = ContentBlock.Text(activeTextFieldValue.text, block.id)
+                                        }
+                                    }
+
                                     OutlinedTextField(
-                                        value = if (isFocused) activeTextFieldValue else tfValue,
+                                        value = tfValue,
                                         onValueChange = { newValue ->
+                                            tfValue = newValue
                                             if (isFocused) {
                                                 activeTextFieldValue = newValue
-                                            } else {
-                                                tfValue = newValue
                                             }
                                         },
                                         placeholder = { Text("Введите текст абзаца...") },
@@ -541,8 +565,7 @@ fun EditorScreen(
                                                     activeTextFieldValue = tfValue
                                                 } else {
                                                     if (activeBlockIndex == index) {
-                                                        tfValue = activeTextFieldValue
-                                                        editorBlocks[index] = ContentBlock.Text(activeTextFieldValue.text, block.id)
+                                                        editorBlocks[index] = ContentBlock.Text(tfValue.text, block.id)
                                                     } else {
                                                         editorBlocks[index] = ContentBlock.Text(tfValue.text, block.id)
                                                     }
@@ -703,7 +726,7 @@ fun EditorScreen(
                     shape = RoundedCornerShape(20.dp),
                     elevation = CardDefaults.cardElevation(4.dp)
                 ) {
-                    val statsText = if (isHtmlMode) contentHtml else serializeBlocksToHtml(editorBlocks)
+                    val statsText = if (isHtmlMode) contentHtmlTfv.text else serializeBlocksToHtml(editorBlocks)
                     Row(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -753,12 +776,22 @@ fun EditorScreen(
 /**
  * Inserts a pair of tags around selection, or standard appends them
  */
-private fun insertHtmlTag(originalText: String, startTag: String, endTag: String): String {
-    return if (originalText.isBlank()) {
-        "$startTag$endTag"
-    } else {
-        "$originalText\n$startTag$endTag"
-    }
+private fun insertHtmlTag(original: TextFieldValue, startTag: String, endTag: String): TextFieldValue {
+    val text = original.text
+    val selection = original.selection
+    
+    val before = text.substring(0, selection.min)
+    val selectedText = text.substring(selection.min, selection.max)
+    val after = text.substring(selection.max)
+    
+    val newText = before + startTag + selectedText + endTag + after
+    // Place cursor right after the opening tag if no text was selected, or after the selected text otherwise
+    val newCursorPos = selection.min + startTag.length + selectedText.length
+    
+    return TextFieldValue(
+        text = newText,
+        selection = androidx.compose.ui.text.TextRange(newCursorPos)
+    )
 }
 
 private fun formatStatsNumber(number: Int): String {
