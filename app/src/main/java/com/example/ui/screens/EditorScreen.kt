@@ -161,7 +161,7 @@ fun EditorScreen(
                             // we'll just insert image in the block if possible, or split block.
                             // However, splitting RichText state HTML by index is tough.
                             // The easiest way is to convert RichText back to HTML, and just use EpubProcessor to parse it again!
-                            val finalHtmlOfBlock = state.toHtml()
+                            val finalHtmlOfBlock = unescapeHtmlEntities(state.toHtml())
                             
                             // Splitting block logic simply by inserting image block. 
                             editorBlocks.removeAt(index)
@@ -219,7 +219,7 @@ fun EditorScreen(
                                     val idx = activeBlockIndex!!
                                     val state = activeRichTextState
                                     if (idx in editorBlocks.indices && editorBlocks[idx] is ContentBlock.Text && state != null) {
-                                        editorBlocks[idx] = ContentBlock.Text(state.toHtml(), editorBlocks[idx].id)
+                                        editorBlocks[idx] = ContentBlock.Text(unescapeHtmlEntities(state.toHtml()), editorBlocks[idx].id)
                                     }
                                 }
                                 val finalHtml = if (isHtmlMode) contentHtmlTfv.text else serializeBlocksToHtml(editorBlocks)
@@ -338,8 +338,18 @@ fun EditorScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        val hasActiveStyle = (!isHtmlMode) && (
+                            activeRichTextState?.currentSpanStyle?.fontWeight == FontWeight.Bold ||
+                            activeRichTextState?.currentSpanStyle?.fontStyle == FontStyle.Italic ||
+                            activeRichTextState?.currentSpanStyle?.textDecoration == TextDecoration.Underline
+                        )
+
                         IconButton(
                             onClick = {
+                                if (hasActiveStyle) {
+                                    Toast.makeText(context, "Отключите форматирование текста перед переходом в HTML режим", Toast.LENGTH_SHORT).show()
+                                    return@IconButton
+                                }
                                 if (isHtmlMode) {
                                     // Turning off HTML Mode -> Visual
                                     editorBlocks.clear()
@@ -354,7 +364,7 @@ fun EditorScreen(
                                         val idx = activeBlockIndex!!
                                         val state = activeRichTextState
                                         if (idx in editorBlocks.indices && editorBlocks[idx] is ContentBlock.Text && state != null) {
-                                            editorBlocks[idx] = ContentBlock.Text(state.toHtml(), editorBlocks[idx].id)
+                                            editorBlocks[idx] = ContentBlock.Text(unescapeHtmlEntities(state.toHtml()), editorBlocks[idx].id)
                                         }
                                     }
                                     contentHtmlTfv = TextFieldValue(text = serializeBlocksToHtml(editorBlocks))
@@ -488,7 +498,7 @@ fun EditorScreen(
                                             } else {
                                                 // Save immediately on focus lost
                                                 if (activeBlockIndex == index) {
-                                                    editorBlocks[index] = ContentBlock.Text(state.toHtml(), block.id)
+                                                    editorBlocks[index] = ContentBlock.Text(unescapeHtmlEntities(state.toHtml()), block.id)
                                                 }
                                             }
                                         },
@@ -690,4 +700,19 @@ fun serializeBlocksToHtml(blocks: List<ContentBlock>): String {
         }
     }
     return sb.toString().trim()
+}
+
+fun unescapeHtmlEntities(html: String): String {
+    // We only want to decode entities like &Pcy; &acy; &scy; but preserve structurally important entities like &lt; &gt; &amp; &quot; &apos; &nbsp;
+    val regex = Regex("&[a-zA-Z0-9#]+;")
+    return regex.replace(html) { matchResult ->
+        val entity = matchResult.value
+        val lowerEntity = entity.lowercase()
+        if (lowerEntity == "&lt;" || lowerEntity == "&gt;" || lowerEntity == "&amp;" || lowerEntity == "&quot;" || lowerEntity == "&apos;" || lowerEntity == "&nbsp;") {
+            entity
+        } else {
+            val decoded = android.text.Html.fromHtml(entity, android.text.Html.FROM_HTML_MODE_LEGACY).toString()
+            if (decoded.isNotEmpty() && decoded != " ") decoded else entity
+        }
+    }
 }
