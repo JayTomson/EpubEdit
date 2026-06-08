@@ -1,6 +1,10 @@
 package com.example
 
 import com.mohamedrejeb.richeditor.model.RichTextState
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.TextRange
+import com.example.ui.screens.handleHtmlAutoClose
+import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -22,5 +26,23 @@ class RichEditorTest {
         val state2 = RichTextState().apply { setHtml(html2) }
         println("HTML1_OUT: [${state1.toHtml()}]")
         println("HTML2_OUT: [${state2.toHtml()}]")
+    }
+
+    @Test
+    fun testHandleHtmlAutoClose() {
+        val oldState = TextFieldValue("<p")
+        val newState = TextFieldValue("<p>", TextRange(3))
+        val result = handleHtmlAutoClose(oldState, newState)
+        assertEquals("<p></p>", result.text)
+        assertEquals(3, result.selection.start)
+    }
+
+    @Test
+    fun testHandleHtmlAutoCloseWithAttributes() {
+        val oldState = TextFieldValue("<p class=\"italic\"")
+        val newState = TextFieldValue("<p class=\"italic\">", TextRange(18))
+        val result = handleHtmlAutoClose(oldState, newState)
+        assertEquals("<p class=\"italic\"></p>", result.text)
+        assertEquals(18, result.selection.start)
     }
 }

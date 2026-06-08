@@ -270,6 +270,50 @@ fun isCursorOnEmptyLine(tf: TextFieldValue): Boolean {
     return lineText.trim().isEmpty()
 }
 
+fun handleHtmlAutoClose(oldState: TextFieldValue, newState: TextFieldValue): TextFieldValue {
+    val oldText = oldState.text
+    val newText = newState.text
+    val selection = newState.selection
+    
+    // Only trigger if we added exactly one character and it is '>'
+    if (newText.length == oldText.length + 1 && selection.collapsed) {
+        val cursor = selection.start
+        if (cursor > 0 && newText[cursor - 1] == '>') {
+            // Find the corresponding '<'
+            var openIdx = -1
+            for (i in cursor - 2 downTo 0) {
+                val c = newText[i]
+                if (c == '<') {
+                    openIdx = i
+                    break
+                }
+                if (c == '>') {
+                    // Encountered a previous tag boundary, so this > is not part of a clean tag
+                    break
+                }
+            }
+            if (openIdx != -1) {
+                // We have a possible tag from openIdx to cursor - 1
+                val tagContent = newText.substring(openIdx + 1, cursor - 1).trim()
+                if (tagContent.isNotEmpty() && !tagContent.startsWith("/") && !tagContent.endsWith("/")) {
+                    // Extract tag name (first word before space)
+                    val tagName = tagContent.split(Regex("\\s+"))[0]
+                    // Check if tagName is simple word composed of standard characters
+                    if (tagName.isNotEmpty() && tagName.all { it.isLetterOrDigit() }) {
+                        val closingTag = "</$tagName>"
+                        val prefix = newText.substring(0, cursor)
+                        val suffix = newText.substring(cursor)
+                        val updatedText = prefix + closingTag + suffix
+                        // Cursor should stay where it is (between opening and closing tags)
+                        return TextFieldValue(updatedText, androidx.compose.ui.text.TextRange(cursor))
+                    }
+                }
+            }
+        }
+    }
+    return newState
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun EditorScreen(
@@ -603,19 +647,34 @@ fun EditorScreen(
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                             modifier = Modifier.weight(1f)
                         ) {
-                            IconButton(onClick = { applyFormatAction("<b>", "</b>") }) {
+                            IconButton(
+                                onClick = { applyFormatAction("<b>", "</b>") },
+                                enabled = isHtmlMode
+                            ) {
                                 Icon(Icons.Default.FormatBold, "Жирный")
                             }
-                            IconButton(onClick = { applyFormatAction("<i>", "</i>") }) {
+                            IconButton(
+                                onClick = { applyFormatAction("<i>", "</i>") },
+                                enabled = isHtmlMode
+                            ) {
                                 Icon(Icons.Default.FormatItalic, "Курсив")
                             }
-                            IconButton(onClick = { applyFormatAction("<u>", "</u>") }) {
+                            IconButton(
+                                onClick = { applyFormatAction("<u>", "</u>") },
+                                enabled = isHtmlMode
+                            ) {
                                 Icon(Icons.Default.FormatUnderlined, "Подчеркнутый")
                             }
-                            IconButton(onClick = { applyFormatAction("<s>", "</s>") }) {
+                            IconButton(
+                                onClick = { applyFormatAction("<s>", "</s>") },
+                                enabled = isHtmlMode
+                            ) {
                                 Icon(Icons.Default.FormatStrikethrough, "Зачеркнутый")
                             }
-                            IconButton(onClick = { applyFormatAction("<p>", "</p>") }) {
+                            IconButton(
+                                onClick = { applyFormatAction("<p>", "</p>") },
+                                enabled = isHtmlMode
+                            ) {
                                 Icon(Icons.Default.Segment, "Абзац")
                             }
                             IconButton(onClick = {
@@ -771,7 +830,9 @@ fun EditorScreen(
                 if (isHtmlMode) {
                     OutlinedTextField(
                         value = htmlTextState,
-                        onValueChange = { htmlTextState = it },
+                        onValueChange = { newVal ->
+                            htmlTextState = handleHtmlAutoClose(htmlTextState, newVal)
+                        },
                         textStyle = TextStyle(
                             fontFamily = FontFamily.Monospace,
                             fontSize = 14.sp,
