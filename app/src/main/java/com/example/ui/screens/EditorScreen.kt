@@ -1,13 +1,20 @@
 package com.example.ui.screens
 
 import android.content.Context
+import android.net.Uri
+import android.util.Log
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -15,7 +22,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -26,14 +36,25 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import com.example.util.ContentBlock
+import com.example.util.EpubProcessor
 import com.example.util.WordStatsHelper
 import com.example.viewmodel.BookViewModel
 import com.mohamedrejeb.richeditor.model.RichTextState
-import com.mohamedrejeb.richeditor.model.rememberRichTextState
-import com.mohamedrejeb.richeditor.ui.material3.OutlinedRichTextEditor
 import com.mohamedrejeb.richeditor.ui.material3.RichTextEditor
+import com.mohamedrejeb.richeditor.ui.material3.RichTextEditorDefaults
+import java.io.File
+import java.io.FileOutputStream
 
-@OptIn(ExperimentalMaterial3Api::class)
+class EditorBlockState(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val isImage: Boolean,
+    val localPath: String = "",
+    val richTextState: RichTextState? = null
+)
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun EditorScreen(
     viewModel: BookViewModel,
@@ -64,8 +85,35 @@ fun EditorScreen(
     var isHtmlMode by remember { mutableStateOf(false) }
     var isFocusMode by remember { mutableStateOf(false) }
 
-    val richTextState = rememberRichTextState()
-    var isInitialLoaded by remember { mutableStateOf(false) }
+    // Stable block state representations to completely prevent focus loss/card updates on change
+    val stableBlocks = remember(chapterId) {
+        val initialHtml = if (currentChapter.contentHtml == "<p>Введите текст вашей новой главы...</p>") "" else currentChapter.contentHtml
+        val parsed = EpubProcessor.parseContentIntoBlocks(context, initialHtml, currentChapter.titleId, currentChapter.title)
+        val initialList = parsed.map { b ->
+            when (b) {
+                is ContentBlock.Text -> {
+                    val s = RichTextState()
+                    s.setHtml(b.htmlText)
+                    EditorBlockState(id = b.id, isImage = false, richTextState = s)
+                }
+                is ContentBlock.Image -> {
+                    EditorBlockState(id = b.id, isImage = true, localPath = b.localPath)
+                }
+            }
+        }.toMutableStateList()
+        if (initialList.isEmpty()) {
+            val s = RichTextState()
+            s.setHtml("")
+            initialList.add(EditorBlockState(isImage = false, richTextState = s))
+        }
+        initialList
+    }
+
+    // Since each block needs a RichTextState, we keep track of active block
+    var activeBlockIndex by remember { mutableStateOf<Int?>(null) }
+    
+    // To allow toolbar interaction, we hold a reference to the active state
+    var activeRichTextState by remember { mutableStateOf<RichTextState?>(null) }
 
     // HTML Mode specific state
     var contentHtmlTfv by remember(currentChapter) {
@@ -73,11 +121,39 @@ fun EditorScreen(
         mutableStateOf(TextFieldValue(if (html == "<p>Введите текст вашей новой главы...</p>") "" else html))
     }
 
-    LaunchedEffect(currentChapter.contentHtml) {
-        if (!isInitialLoaded) {
-            val initialHtml = if (currentChapter.contentHtml == "<p>Введите текст вашей новой главы...</p>") "" else currentChapter.contentHtml
-            richTextState.setHtml(initialHtml)
-            isInitialLoaded = true
+    fun saveIllustrationLocally(context: Context, uri: Uri): String? {
+        val mediaDir = File(context.filesDir, "epub_media")
+        if (!mediaDir.exists()) mediaDir.mkdirs()
+        var ext = "jpg"
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            val nameIdx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+            if (nameIdx != -1 && cursor.moveToFirst()) {
+                val name = cursor.getString(nameIdx)
+                ext = name.substringAfterLast(".", "jpg").lowercase()
+            }
+        }
+        val destFile = File(mediaDir, "media_${System.currentTimeMillis()}.${ext}")
+        return try {
+            val ips = context.contentResolver.openInputStream(uri) ?: return null
+            val ops = FileOutputStream(destFile)
+            ips.use { input -> ops.use { output -> input.copyTo(output) } }
+            destFile.absolutePath
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    val imagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let {
+            val cachedPath = saveIllustrationLocally(context, uri)
+            if (cachedPath != null) {
+                val index = activeBlockIndex ?: stableBlocks.lastIndex
+                val insertPos = if (index != -1) index + 1 else stableBlocks.size
+                stableBlocks.add(insertPos, EditorBlockState(isImage = true, localPath = cachedPath))
+                Toast.makeText(context, "Иллюстрация добавлена!", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -101,7 +177,7 @@ fun EditorScreen(
                                 val finalHtml = if (isHtmlMode) {
                                     contentHtmlTfv.text
                                 } else {
-                                    decodeCyrillicFromHtmlEntities(richTextState.toHtml())
+                                    serializeStableBlocksToHtml(stableBlocks)
                                 }
                                 viewModel.updateChapterContent(
                                     chapterId = chapterId,
@@ -109,7 +185,7 @@ fun EditorScreen(
                                     contentHtml = finalHtml,
                                     previewImagePath = currentChapter.previewImagePath
                                 )
-                                android.widget.Toast.makeText(context, "Глава сохранена!", android.widget.Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Глава сохранена!", Toast.LENGTH_SHORT).show()
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                             shape = RoundedCornerShape(12.dp),
@@ -140,13 +216,13 @@ fun EditorScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         // Bold formatting
-                        val isBoldActive = richTextState.currentSpanStyle.fontWeight == FontWeight.Bold
+                        val isBoldActive = activeRichTextState?.currentSpanStyle?.fontWeight == FontWeight.Bold
                         IconButton(
                             onClick = {
                                 if (isHtmlMode) {
                                     contentHtmlTfv = insertHtmlTag(contentHtmlTfv, "<b>", "</b>")
                                 } else {
-                                    richTextState.toggleSpanStyle(SpanStyle(fontWeight = FontWeight.Bold))
+                                    activeRichTextState?.toggleSpanStyle(SpanStyle(fontWeight = FontWeight.Bold))
                                 }
                             },
                             colors = IconButtonDefaults.iconButtonColors(
@@ -158,13 +234,13 @@ fun EditorScreen(
                         }
 
                         // Italic formatting
-                        val isItalicActive = richTextState.currentSpanStyle.fontStyle == FontStyle.Italic
+                        val isItalicActive = activeRichTextState?.currentSpanStyle?.fontStyle == FontStyle.Italic
                         IconButton(
                             onClick = {
                                 if (isHtmlMode) {
                                     contentHtmlTfv = insertHtmlTag(contentHtmlTfv, "<i>", "</i>")
                                 } else {
-                                    richTextState.toggleSpanStyle(SpanStyle(fontStyle = FontStyle.Italic))
+                                    activeRichTextState?.toggleSpanStyle(SpanStyle(fontStyle = FontStyle.Italic))
                                 }
                             },
                             colors = IconButtonDefaults.iconButtonColors(
@@ -176,13 +252,13 @@ fun EditorScreen(
                         }
 
                         // Underline formatting
-                        val isUnderlineActive = richTextState.currentSpanStyle.textDecoration == TextDecoration.Underline
+                        val isUnderlineActive = activeRichTextState?.currentSpanStyle?.textDecoration == TextDecoration.Underline
                         IconButton(
                             onClick = {
                                 if (isHtmlMode) {
                                     contentHtmlTfv = insertHtmlTag(contentHtmlTfv, "<u>", "</u>")
                                 } else {
-                                    richTextState.toggleSpanStyle(SpanStyle(textDecoration = TextDecoration.Underline))
+                                    activeRichTextState?.toggleSpanStyle(SpanStyle(textDecoration = TextDecoration.Underline))
                                 }
                             },
                             colors = IconButtonDefaults.iconButtonColors(
@@ -203,6 +279,15 @@ fun EditorScreen(
                         ) {
                             Icon(imageVector = Icons.Default.Notes, contentDescription = "Абзац")
                         }
+
+                        IconButton(
+                            onClick = {
+                                imagePickerLauncher.launch("image/*")
+                            },
+                            colors = IconButtonDefaults.iconButtonColors(contentColor = MaterialTheme.colorScheme.primary)
+                        ) {
+                            Icon(imageVector = Icons.Default.AddPhotoAlternate, contentDescription = "Добавить иллюстрацию")
+                        }
                     }
 
                     Row(
@@ -210,24 +295,41 @@ fun EditorScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         val hasActiveStyle = (!isHtmlMode) && (
-                            richTextState.currentSpanStyle.fontWeight == FontWeight.Bold ||
-                            richTextState.currentSpanStyle.fontStyle == FontStyle.Italic ||
-                            richTextState.currentSpanStyle.textDecoration == TextDecoration.Underline
+                            activeRichTextState?.currentSpanStyle?.fontWeight == FontWeight.Bold ||
+                            activeRichTextState?.currentSpanStyle?.fontStyle == FontStyle.Italic ||
+                            activeRichTextState?.currentSpanStyle?.textDecoration == TextDecoration.Underline
                         )
 
                         IconButton(
                             onClick = {
                                 if (hasActiveStyle) {
-                                    android.widget.Toast.makeText(context, "Отключите форматирование текста перед переходом в HTML режим", android.widget.Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Отключите форматирование текста перед переходом в HTML режим", Toast.LENGTH_SHORT).show()
                                     return@IconButton
                                 }
                                 if (isHtmlMode) {
                                     // Turning off HTML Mode -> Visual
-                                    richTextState.setHtml(contentHtmlTfv.text)
+                                    val parsed = EpubProcessor.parseContentIntoBlocks(context, contentHtmlTfv.text, currentChapter.titleId, currentChapter.title)
+                                    stableBlocks.clear()
+                                    parsed.forEach { b ->
+                                        if (b is ContentBlock.Text) {
+                                            val s = RichTextState()
+                                            s.setHtml(b.htmlText)
+                                            stableBlocks.add(EditorBlockState(id = b.id, isImage = false, richTextState = s))
+                                        } else if (b is ContentBlock.Image) {
+                                            stableBlocks.add(EditorBlockState(id = b.id, isImage = true, localPath = b.localPath))
+                                        }
+                                    }
+                                    if (stableBlocks.isEmpty()) {
+                                        val s = RichTextState()
+                                        s.setHtml("")
+                                        stableBlocks.add(EditorBlockState(isImage = false, richTextState = s))
+                                    }
                                 } else {
                                     // Turning on HTML Mode -> HTML string
-                                    contentHtmlTfv = TextFieldValue(text = decodeCyrillicFromHtmlEntities(richTextState.toHtml()))
+                                    contentHtmlTfv = TextFieldValue(text = serializeStableBlocksToHtml(stableBlocks))
                                 }
+                                activeBlockIndex = null
+                                activeRichTextState = null
                                 isHtmlMode = !isHtmlMode
                             },
                             colors = IconButtonDefaults.iconButtonColors(
@@ -325,17 +427,101 @@ fun EditorScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
                 } else {
-                    OutlinedRichTextEditor(
-                        state = richTextState,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .defaultMinSize(minHeight = 400.dp),
-                        textStyle = TextStyle(
-                            fontSize = 16.sp,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            lineHeight = 26.sp
-                        )
-                    )
+                    stableBlocks.forEachIndexed { index, block ->
+                        if (block.isImage) {
+                            var showDeleteConfirmDialog by remember { mutableStateOf(false) }
+                            Card(
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .wrapContentHeight()
+                                    .padding(vertical = 4.dp)
+                                    .combinedClickable(
+                                        onClick = { Toast.makeText(context, "Зажмите для удаления иллюстрации", Toast.LENGTH_SHORT).show() },
+                                        onLongClick = { showDeleteConfirmDialog = true }
+                                    )
+                                    .border(2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f), RoundedCornerShape(16.dp)),
+                                elevation = CardDefaults.cardElevation(2.dp)
+                            ) {
+                                Box(modifier = Modifier.fillMaxWidth()) {
+                                    Column(modifier = Modifier.padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                        val file = File(block.localPath)
+                                        if (file.exists()) {
+                                            AsyncImage(
+                                                model = file,
+                                                contentDescription = "Иллюстрация главы",
+                                                contentScale = ContentScale.FillWidth,
+                                                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                                            )
+                                        } else {
+                                            Row(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(imageVector = Icons.Default.BrokenImage, contentDescription = "Файл изображения отсутствует", tint = MaterialTheme.colorScheme.error)
+                                                Text(text = "Изображение '${file.name}' не найдено", color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                                            }
+                                        }
+                                        Text(text = "ИЛЛЮСТРАЦИЯ (Зажмите для удаления)", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.secondary, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
+                                    }
+                                }
+                            }
+
+                            if (showDeleteConfirmDialog) {
+                                AlertDialog(
+                                    onDismissRequest = { showDeleteConfirmDialog = false },
+                                    title = { Text("Удалить иллюстрацию?") },
+                                    text = { Text("Вы действительно хотите удалить эту иллюстрацию из главы?") },
+                                    confirmButton = {
+                                        Button(
+                                            onClick = {
+                                                stableBlocks.removeAt(index)
+                                                if (stableBlocks.isEmpty()) {
+                                                    val s = RichTextState()
+                                                    s.setHtml("")
+                                                    stableBlocks.add(EditorBlockState(isImage = false, richTextState = s))
+                                                }
+                                                activeBlockIndex = null
+                                                activeRichTextState = null
+                                                showDeleteConfirmDialog = false
+                                                Toast.makeText(context, "Иллюстрация удалена!", Toast.LENGTH_SHORT).show()
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                                        ) { Text("Удалить") }
+                                    },
+                                    dismissButton = {
+                                        TextButton(onClick = { showDeleteConfirmDialog = false }) { Text("Отмена", color = MaterialTheme.colorScheme.outline) }
+                                    },
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                    shape = RoundedCornerShape(24.dp)
+                                )
+                            }
+                        } else {
+                            val state = block.richTextState
+                            if (state != null) {
+                                RichTextEditor(
+                                    state = state,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .onFocusChanged { focusState ->
+                                            if (focusState.isFocused) {
+                                                activeBlockIndex = index
+                                                activeRichTextState = state
+                                            }
+                                        },
+                                    textStyle = TextStyle(
+                                        fontSize = 16.sp,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        lineHeight = 26.sp
+                                    ),
+                                    colors = RichTextEditorDefaults.richTextEditorColors(
+                                        containerColor = Color.Transparent,
+                                        focusedIndicatorColor = Color.Transparent,
+                                        unfocusedIndicatorColor = Color.Transparent,
+                                        disabledIndicatorColor = Color.Transparent
+                                    )
+                                )
+                            }
+                        }
+                    }
                 }
                 
                 Spacer(modifier = Modifier.height(100.dp)) // padding for bottom stats
@@ -351,8 +537,7 @@ fun EditorScreen(
                     shape = RoundedCornerShape(20.dp),
                     elevation = CardDefaults.cardElevation(4.dp)
                 ) {
-                    // Update stats only string calculation
-                    val statsHtmlText = if (isHtmlMode) contentHtmlTfv.text else decodeCyrillicFromHtmlEntities(richTextState.toHtml())
+                    val statsHtmlText = if (isHtmlMode) contentHtmlTfv.text else serializeStableBlocksToHtml(stableBlocks)
                     Row(
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -414,4 +599,24 @@ fun decodeCyrillicFromHtmlEntities(html: String): String {
         decoded = decoded.replace(entity, char)
     }
     return decoded
+}
+
+fun serializeStableBlocksToHtml(blocks: List<EditorBlockState>): String {
+    val sb = StringBuilder()
+    blocks.forEach { b ->
+        if (b.isImage) {
+            val file = File(b.localPath)
+            sb.append("<div style=\"text-align:center; margin:12px 0;\"><img src=\"${file.name}\" style=\"max-width:100%;\" /></div>\n")
+        } else {
+            val html = decodeCyrillicFromHtmlEntities(b.richTextState?.toHtml() ?: "").trim()
+            if (html.isNotEmpty()) {
+                if (html.startsWith("<p>") || html.startsWith("<div>") || html.startsWith("<h")) {
+                    sb.append(html).append("\n")
+                } else {
+                    sb.append("<p>").append(html).append("</p>\n")
+                }
+            }
+        }
+    }
+    return sb.toString().trim()
 }
