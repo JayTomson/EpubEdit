@@ -42,7 +42,7 @@ import com.example.util.EpubProcessor
 import com.example.util.WordStatsHelper
 import com.example.viewmodel.BookViewModel
 import com.mohamedrejeb.richeditor.model.RichTextState
-import com.mohamedrejeb.richeditor.ui.material3.RichTextEditor
+import com.mohamedrejeb.richeditor.ui.material3.OutlinedRichTextEditor
 import com.mohamedrejeb.richeditor.ui.material3.RichTextEditorDefaults
 import java.io.File
 import java.io.FileOutputStream
@@ -53,6 +53,30 @@ class EditorBlockState(
     val localPath: String = "",
     val richTextState: RichTextState? = null
 )
+
+/**
+ * Cleanly decodes HTML entity strings like &YAcy; or &period; / &comma; into normal Unicode characters.
+ * Keeps standard markup/structural entities like &lt;, &gt;, &amp;, &quot;, &apos;, and &nbsp; intact
+ * to prevent parsing or HTML injection side-effects.
+ */
+fun decodeHtmlEntities(html: String): String {
+    if (!html.contains('&')) return html
+    val regex = Regex("&[a-zA-Z0-9#]+;")
+    return regex.replace(html) { matchResult ->
+        val entity = matchResult.value
+        val lower = entity.lowercase()
+        if (lower == "&lt;" || lower == "&gt;" || lower == "&amp;" || lower == "&quot;" || lower == "&apos;" || lower == "&nbsp;") {
+            entity
+        } else {
+            try {
+                val decoded = android.text.Html.fromHtml(entity, android.text.Html.FROM_HTML_MODE_LEGACY).toString()
+                if (decoded.isNotEmpty()) decoded else entity
+            } catch (e: Exception) {
+                entity
+            }
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -88,7 +112,8 @@ fun EditorScreen(
     // Stable block state representations to completely prevent focus loss/card updates on change
     val stableBlocks = remember(chapterId) {
         val initialHtml = if (currentChapter.contentHtml == "<p>Введите текст вашей новой главы...</p>") "" else currentChapter.contentHtml
-        val parsed = EpubProcessor.parseContentIntoBlocks(context, initialHtml, currentChapter.titleId, currentChapter.title)
+        val decodedHtml = decodeHtmlEntities(initialHtml)
+        val parsed = EpubProcessor.parseContentIntoBlocks(context, decodedHtml, currentChapter.titleId, currentChapter.title)
         val initialList = parsed.map { b ->
             when (b) {
                 is ContentBlock.Text -> {
@@ -115,10 +140,11 @@ fun EditorScreen(
     // To allow toolbar interaction, we hold a reference to the active state
     var activeRichTextState by remember { mutableStateOf<RichTextState?>(null) }
 
-    // HTML Mode specific state
+    // HTML Mode specific state with entities pre-decoded for supreme legibility
     var contentHtmlTfv by remember(currentChapter) {
         val html = currentChapter.contentHtml
-        mutableStateOf(TextFieldValue(if (html == "<p>Введите текст вашей новой главы...</p>") "" else html))
+        val txt = if (html == "<p>Введите текст вашей новой главы...</p>") "" else html
+        mutableStateOf(TextFieldValue(decodeHtmlEntities(txt)))
     }
 
     fun saveIllustrationLocally(context: Context, uri: Uri): String? {
@@ -175,7 +201,7 @@ fun EditorScreen(
                         Button(
                             onClick = {
                                 val finalHtml = if (isHtmlMode) {
-                                    contentHtmlTfv.text
+                                    decodeHtmlEntities(contentHtmlTfv.text)
                                 } else {
                                     serializeStableBlocksToHtml(stableBlocks)
                                 }
@@ -308,7 +334,8 @@ fun EditorScreen(
                                 }
                                 if (isHtmlMode) {
                                     // Turning off HTML Mode -> Visual
-                                    val parsed = EpubProcessor.parseContentIntoBlocks(context, contentHtmlTfv.text, currentChapter.titleId, currentChapter.title)
+                                    val decodedHtml = decodeHtmlEntities(contentHtmlTfv.text)
+                                    val parsed = EpubProcessor.parseContentIntoBlocks(context, decodedHtml, currentChapter.titleId, currentChapter.title)
                                     stableBlocks.clear()
                                     parsed.forEach { b ->
                                         if (b is ContentBlock.Text) {
@@ -326,16 +353,16 @@ fun EditorScreen(
                                     }
                                 } else {
                                     // Turning on HTML Mode -> HTML string
-                                    contentHtmlTfv = TextFieldValue(text = serializeStableBlocksToHtml(stableBlocks))
+                                    contentHtmlTfv = TextFieldValue(text = decodeHtmlEntities(serializeStableBlocksToHtml(stableBlocks)))
                                 }
                                 activeBlockIndex = null
                                 activeRichTextState = null
                                 isHtmlMode = !isHtmlMode
-                            },
-                            colors = IconButtonDefaults.iconButtonColors(
-                                containerColor = if (isHtmlMode) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                                contentColor = if (isHtmlMode) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary
-                            )
+                             },
+                             colors = IconButtonDefaults.iconButtonColors(
+                                 containerColor = if (isHtmlMode) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                                 contentColor = if (isHtmlMode) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary
+                             )
                         ) {
                             Icon(imageVector = Icons.Default.Code, contentDescription = "HTML код")
                         }
@@ -497,7 +524,7 @@ fun EditorScreen(
                         } else {
                             val state = block.richTextState
                             if (state != null) {
-                                RichTextEditor(
+                                OutlinedRichTextEditor(
                                     state = state,
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -507,16 +534,17 @@ fun EditorScreen(
                                                 activeRichTextState = state
                                             }
                                         },
+                                    label = { Text("Текст главы") },
+                                    shape = RoundedCornerShape(12.dp),
                                     textStyle = TextStyle(
                                         fontSize = 16.sp,
                                         color = MaterialTheme.colorScheme.onSurface,
                                         lineHeight = 26.sp
                                     ),
-                                    colors = RichTextEditorDefaults.richTextEditorColors(
-                                        containerColor = Color.Transparent,
-                                        focusedIndicatorColor = Color.Transparent,
-                                        unfocusedIndicatorColor = Color.Transparent,
-                                        disabledIndicatorColor = Color.Transparent
+                                    colors = RichTextEditorDefaults.outlinedRichTextEditorColors(
+                                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                        unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.15f)
                                     )
                                 )
                             }
@@ -574,33 +602,6 @@ private fun formatStatsNumber(number: Int): String {
     return java.text.DecimalFormat("#,###").format(number)
 }
 
-fun decodeCyrillicFromHtmlEntities(html: String): String {
-    val cyrillicMap = mapOf(
-        "&Acy;" to "А", "&acy;" to "а", "&Bcy;" to "Б", "&bcy;" to "б",
-        "&Vcy;" to "В", "&vcy;" to "в", "&Gcy;" to "Г", "&gcy;" to "г",
-        "&Dcy;" to "Д", "&dcy;" to "д", "&Iecy;" to "Е", "&iecy;" to "е",
-        "&Yocy;" to "Ё", "&yocy;" to "ё", "&Zhcy;" to "Ж", "&zhcy;" to "ж",
-        "&Zcy;" to "З", "&zcy;" to "з", "&Icy;" to "И", "&icy;" to "и",
-        "&Jcy;" to "Й", "&jcy;" to "й", "&Kcy;" to "К", "&kcy;" to "к",
-        "&Lcy;" to "Л", "&lcy;" to "л", "&Mcy;" to "М", "&mcy;" to "м",
-        "&Ncy;" to "Н", "&ncy;" to "н", "&Ocy;" to "О", "&ocy;" to "о",
-        "&Pcy;" to "П", "&pcy;" to "п", "&Rcy;" to "Р", "&rcy;" to "р",
-        "&Scy;" to "С", "&scy;" to "с", "&Tcy;" to "Т", "&tcy;" to "т",
-        "&Ucy;" to "У", "&ucy;" to "у", "&Fcy;" to "Ф", "&fcy;" to "ф",
-        "&Hcy;" to "Х", "&hcy;" to "х", "&Ccy;" to "Ц", "&ccy;" to "ц",
-        "&Chcy;" to "Ч", "&chcy;" to "ч", "&Shcy;" to "Ш", "&shcy;" to "ш",
-        "&Shhcy;" to "Щ", "&shhcy;" to "щ", "&Hardcy;" to "Ъ", "&hardcy;" to "ъ",
-        "&Ycy;" to "Ы", "&ycy;" to "ы", "&Softcy;" to "Ь", "&softcy;" to "ь",
-        "&Ecy;" to "Э", "&ecy;" to "э", "&Yucy;" to "Ю", "&yucy;" to "ю",
-        "&Yacy;" to "Я", "&yacy;" to "я", "&numero;" to "№"
-    )
-    var decoded = html
-    for ((entity, char) in cyrillicMap) {
-        decoded = decoded.replace(entity, char)
-    }
-    return decoded
-}
-
 fun serializeStableBlocksToHtml(blocks: List<EditorBlockState>): String {
     val sb = StringBuilder()
     blocks.forEach { b ->
@@ -608,7 +609,7 @@ fun serializeStableBlocksToHtml(blocks: List<EditorBlockState>): String {
             val file = File(b.localPath)
             sb.append("<div style=\"text-align:center; margin:12px 0;\"><img src=\"${file.name}\" style=\"max-width:100%;\" /></div>\n")
         } else {
-            val html = decodeCyrillicFromHtmlEntities(b.richTextState?.toHtml() ?: "").trim()
+            val html = decodeHtmlEntities(b.richTextState?.toHtml() ?: "").trim()
             if (html.isNotEmpty()) {
                 if (html.startsWith("<p>") || html.startsWith("<div>") || html.startsWith("<h")) {
                     sb.append(html).append("\n")
