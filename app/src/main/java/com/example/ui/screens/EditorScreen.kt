@@ -197,6 +197,181 @@ fun EditorScreen(
     var activeBlockIndex by remember { mutableStateOf<Int?>(null) }
     var activeTextFieldValue by remember { mutableStateOf(TextFieldValue("")) }
 
+    var isBoldActive by remember { mutableStateOf(false) }
+    var isItalicActive by remember { mutableStateOf(false) }
+    var isUnderlineActive by remember { mutableStateOf(false) }
+
+    var htmlTextFieldValue by remember(contentHtml) {
+        mutableStateOf(TextFieldValue(contentHtml))
+    }
+
+    // Automatic close tags helper inside HTML editor screen
+    fun handleHtmlAutoClose(oldValue: TextFieldValue, newValue: TextFieldValue): TextFieldValue {
+        val newText = newValue.text
+        val newSelection = newValue.selection
+        
+        // We only trigger auto-close when a character was added and it is '>'
+        if (newSelection.collapsed && 
+            newSelection.start > 0 && 
+            newSelection.start <= newText.length && 
+            newText[newSelection.start - 1] == '>' && 
+            newText.length > oldValue.text.length
+        ) {
+            val cursor = newSelection.start
+            // Look backward for the matching '<'
+            var openIdx = -1
+            for (i in (cursor - 2) downTo 0) {
+                val c = newText[i]
+                if (c == '<') {
+                    openIdx = i
+                    break
+                } else if (c == '>') {
+                    // Found another closing bracket before opening bracket, so this is not a clean tag
+                    break
+                }
+            }
+            
+            if (openIdx != -1) {
+                val tagInner = newText.substring(openIdx + 1, cursor - 1).trim()
+                // Check if it's NOT a closing tag (starts with '/') or self-closing tag (ends with '/')
+                if (tagInner.isNotEmpty() && !tagInner.startsWith("/") && !tagInner.endsWith("/")) {
+                    // Get the tag name (up to the first space or attribute start)
+                    val tagName = tagInner.split(Regex("\\s+"))[0]
+                    // Validate tag name (must be alphanumeric)
+                    if (tagName.matches(Regex("[a-zA-Z0-9]+"))) {
+                        val closeTag = "</$tagName>"
+                        val augmentedText = newText.substring(0, cursor) + closeTag + newText.substring(cursor)
+                        return TextFieldValue(
+                            text = augmentedText,
+                            selection = androidx.compose.ui.text.TextRange(cursor)
+                        )
+                    }
+                }
+            }
+        }
+        return newValue
+    }
+
+    // Interactive writer toggling format helper for Visual mode
+    fun handleVisualFormatClick(
+        tagOpen: String,
+        tagClose: String,
+        isActive: Boolean,
+        onActiveChange: (Boolean) -> Unit
+    ) {
+        val idx = activeBlockIndex ?: return
+        val block = editorBlocks.getOrNull(idx) as? ContentBlock.Text ?: return
+        val tf = activeTextFieldValue
+        val text = tf.text
+        val selection = tf.selection
+        
+        if (!selection.collapsed) {
+            // Wrapping selected word/text bounds
+            val selectedText = text.substring(selection.start, selection.end)
+            val newText = text.substring(0, selection.start) + 
+                          tagOpen + selectedText + tagClose + 
+                          text.substring(selection.end)
+            
+            val newSelectionStart = selection.start + tagOpen.length + selectedText.length + tagClose.length
+            val newTf = TextFieldValue(
+                text = newText,
+                selection = androidx.compose.ui.text.TextRange(newSelectionStart)
+            )
+            activeTextFieldValue = newTf
+            editorBlocks[idx] = ContentBlock.Text(plainTextToHtml(newText), block.id)
+        } else {
+            // Single cursor active toggled typing style
+            if (isActive) {
+                // If already active, turn OFF by moving cursor past the closing tag
+                val cursor = selection.start
+                if (cursor <= text.length - tagClose.length && 
+                    text.substring(cursor, cursor + tagClose.length) == tagClose) {
+                    val newTf = tf.copy(
+                        selection = androidx.compose.ui.text.TextRange(cursor + tagClose.length)
+                    )
+                    activeTextFieldValue = newTf
+                } else {
+                    val nextOpt = text.indexOf(tagClose, cursor)
+                    if (nextOpt != -1) {
+                        activeTextFieldValue = tf.copy(
+                            selection = androidx.compose.ui.text.TextRange(nextOpt + tagClose.length)
+                        )
+                    }
+                }
+                onActiveChange(false)
+            } else {
+                // Turn ON by inserting tagOpen/tagClose and positioning cursor inside
+                val cursor = selection.start
+                val newText = text.substring(0, cursor) + tagOpen + tagClose + text.substring(cursor)
+                val newTf = TextFieldValue(
+                    text = newText,
+                    selection = androidx.compose.ui.text.TextRange(cursor + tagOpen.length)
+                )
+                activeTextFieldValue = newTf
+                editorBlocks[idx] = ContentBlock.Text(plainTextToHtml(newText), block.id)
+                onActiveChange(true)
+            }
+        }
+    }
+
+    // Unified Action Dispatcher for formatting action across modes
+    val applyFormatAction = { tagOpen: String, tagClose: String ->
+        if (isHtmlMode) {
+            val currentTf = htmlTextFieldValue
+            val text = currentTf.text
+            val selection = currentTf.selection
+            val newText: String
+            val newCursorIdx: Int
+            if (!selection.collapsed) {
+                val selectedText = text.substring(selection.start, selection.end)
+                newText = text.substring(0, selection.start) + tagOpen + selectedText + tagClose + text.substring(selection.end)
+                newCursorIdx = selection.start + tagOpen.length + selectedText.length + tagClose.length
+            } else {
+                val cursor = selection.start
+                newText = text.substring(0, cursor) + tagOpen + tagClose + text.substring(cursor)
+                newCursorIdx = cursor + tagOpen.length
+            }
+            val updatedTf = TextFieldValue(
+                text = newText,
+                selection = androidx.compose.ui.text.TextRange(newCursorIdx)
+            )
+            htmlTextFieldValue = handleHtmlAutoClose(htmlTextFieldValue, updatedTf)
+            contentHtml = htmlTextFieldValue.text
+        } else {
+            when (tagOpen) {
+                "<b>" -> handleVisualFormatClick(tagOpen, tagClose, isBoldActive) { isBoldActive = it }
+                "<i>" -> handleVisualFormatClick(tagOpen, tagClose, isItalicActive) { isItalicActive = it }
+                "<u>" -> handleVisualFormatClick(tagOpen, tagClose, isUnderlineActive) { isUnderlineActive = it }
+                else -> {
+                    // Regular paragraph/custom tag insertion
+                    val idx = activeBlockIndex
+                    if (idx != null && idx in editorBlocks.indices) {
+                        val block = editorBlocks[idx] as? ContentBlock.Text
+                        if (block != null) {
+                            val tf = activeTextFieldValue
+                            val text = tf.text
+                            val selection = tf.selection
+                            val newText: String
+                            val newCursor: Int
+                            if (!selection.collapsed) {
+                                val selectedText = text.substring(selection.start, selection.end)
+                                newText = text.substring(0, selection.start) + tagOpen + selectedText + tagClose + text.substring(selection.end)
+                                newCursor = selection.start + tagOpen.length + selectedText.length + tagClose.length
+                            } else {
+                                val cursor = selection.start
+                                newText = text.substring(0, cursor) + tagOpen + tagClose + text.substring(cursor)
+                                newCursor = cursor + tagOpen.length
+                            }
+                            val newTf = TextFieldValue(newText, androidx.compose.ui.text.TextRange(newCursor))
+                            activeTextFieldValue = newTf
+                            editorBlocks[idx] = ContentBlock.Text(plainTextToHtml(newText), block.id)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Copied local file saver
     fun saveIllustrationLocally(context: Context, uri: Uri): String? {
         val mediaDir = File(context.filesDir, "epub_media")
@@ -376,31 +551,6 @@ fun EditorScreen(
                 elevation = CardDefaults.cardElevation(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                val activeText = if (isHtmlMode) {
-                    contentHtml
-                } else {
-                    val idx = activeBlockIndex
-                    if (idx != null && idx in editorBlocks.indices) {
-                        (editorBlocks[idx] as? ContentBlock.Text)?.htmlText ?: ""
-                    } else {
-                        ""
-                    }
-                }
-
-                val updateActiveText = { newText: String ->
-                    if (isHtmlMode) {
-                        contentHtml = newText
-                    } else {
-                        val idx = activeBlockIndex
-                        if (idx != null && idx in editorBlocks.indices) {
-                            if (editorBlocks[idx] is ContentBlock.Text) {
-                                editorBlocks[idx] = ContentBlock.Text(newText, editorBlocks[idx].id)
-                                activeTextFieldValue = activeTextFieldValue.copy(text = newText)
-                            }
-                        }
-                    }
-                }
-
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -414,34 +564,37 @@ fun EditorScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         IconButton(
-                            onClick = { updateActiveText(insertHtmlTag(activeText, "<b>", "</b>")) },
+                            onClick = { applyFormatAction("<b>", "</b>") },
                             colors = IconButtonDefaults.iconButtonColors(
-                                contentColor = MaterialTheme.colorScheme.primary
+                                containerColor = if (isBoldActive && !isHtmlMode) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f) else Color.Transparent,
+                                contentColor = if (isBoldActive && !isHtmlMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         ) {
                             Icon(imageVector = Icons.Default.FormatBold, contentDescription = "Жирный")
                         }
 
                         IconButton(
-                            onClick = { updateActiveText(insertHtmlTag(activeText, "<i>", "</i>")) },
+                            onClick = { applyFormatAction("<i>", "</i>") },
                             colors = IconButtonDefaults.iconButtonColors(
-                                contentColor = MaterialTheme.colorScheme.primary
+                                containerColor = if (isItalicActive && !isHtmlMode) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f) else Color.Transparent,
+                                contentColor = if (isItalicActive && !isHtmlMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         ) {
                             Icon(imageVector = Icons.Default.FormatItalic, contentDescription = "Курсив")
                         }
 
                         IconButton(
-                            onClick = { updateActiveText(insertHtmlTag(activeText, "<u>", "</u>")) },
+                            onClick = { applyFormatAction("<u>", "</u>") },
                             colors = IconButtonDefaults.iconButtonColors(
-                                contentColor = MaterialTheme.colorScheme.primary
+                                containerColor = if (isUnderlineActive && !isHtmlMode) MaterialTheme.colorScheme.primary.copy(alpha = 0.2f) else Color.Transparent,
+                                contentColor = if (isUnderlineActive && !isHtmlMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         ) {
                             Icon(imageVector = Icons.Default.FormatUnderlined, contentDescription = "Подчеркнутый")
                         }
 
                         IconButton(
-                            onClick = { updateActiveText(insertHtmlTag(activeText, "<p>", "</p>")) },
+                            onClick = { applyFormatAction("<p>", "</p>") },
                             colors = IconButtonDefaults.iconButtonColors(
                                 contentColor = MaterialTheme.colorScheme.primary
                             )
@@ -493,6 +646,10 @@ fun EditorScreen(
                         // Switch between Visual format view or Code raw tag view
                         IconButton(
                             onClick = {
+                                if (isBoldActive || isItalicActive || isUnderlineActive) {
+                                    Toast.makeText(context, "Отключите активные стили форматирования перед переходом в HTML!", Toast.LENGTH_SHORT).show()
+                                    return@IconButton
+                                }
                                 if (isHtmlMode) {
                                     // Turning off HTML Mode: parse contentHtml into editorBlocks
                                     editorBlocks.clear()
@@ -506,9 +663,16 @@ fun EditorScreen(
                                 }
                                 isHtmlMode = !isHtmlMode
                             },
+                            enabled = !(isBoldActive || isItalicActive || isUnderlineActive),
                             colors = IconButtonDefaults.iconButtonColors(
                                 containerColor = if (isHtmlMode) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                                contentColor = if (isHtmlMode) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary
+                                contentColor = if (isHtmlMode) {
+                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                } else if (isBoldActive || isItalicActive || isUnderlineActive) {
+                                    MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                                } else {
+                                    MaterialTheme.colorScheme.primary
+                                }
                             )
                         ) {
                             Icon(imageVector = Icons.Default.Code, contentDescription = "HTML код")
@@ -580,8 +744,12 @@ fun EditorScreen(
                     item {
                         // Advanced Code-Editor Style Raw Html inputs
                         OutlinedTextField(
-                            value = contentHtml,
-                            onValueChange = { contentHtml = it },
+                            value = htmlTextFieldValue,
+                            onValueChange = { newValue ->
+                                val processed = handleHtmlAutoClose(htmlTextFieldValue, newValue)
+                                htmlTextFieldValue = processed
+                                contentHtml = processed.text
+                            },
                             placeholder = { Text("<p>Напишите содержание главы здесь...</p>") },
                             textStyle = TextStyle(
                                 fontFamily = FontFamily.Monospace,
@@ -611,14 +779,20 @@ fun EditorScreen(
 
                                     val isFocused = activeBlockIndex == index
 
+                                    // Keep tfValue and activeTextFieldValue in sync if focused
+                                    if (isFocused && activeTextFieldValue.text != tfValue.text) {
+                                        tfValue = activeTextFieldValue
+                                    }
+
                                     OutlinedTextField(
                                         value = if (isFocused) activeTextFieldValue else tfValue,
                                         onValueChange = { newValue ->
+                                            tfValue = newValue
                                             if (isFocused) {
                                                 activeTextFieldValue = newValue
-                                            } else {
-                                                tfValue = newValue
                                             }
+                                            // Save to blocks in real time for word counts and seamless updates
+                                            editorBlocks[index] = ContentBlock.Text(plainTextToHtml(newValue.text), block.id)
                                         },
                                         placeholder = { Text("Введите text абзаца...") },
                                         textStyle = TextStyle(
@@ -633,6 +807,10 @@ fun EditorScreen(
                                                 if (focusState.isFocused) {
                                                     activeBlockIndex = index
                                                     activeTextFieldValue = tfValue
+                                                    // Reset styling active modes on changing block focus
+                                                    isBoldActive = false
+                                                    isItalicActive = false
+                                                    isUnderlineActive = false
                                                 } else {
                                                     if (activeBlockIndex == index) {
                                                         tfValue = activeTextFieldValue
