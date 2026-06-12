@@ -594,12 +594,7 @@ fun FileCard(
             // Drag indicators / Move actions
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-                modifier = Modifier.pointerInput(Unit) {
-                    detectTapGestures(
-                        onPress = { /* consume taps to prevent row selection */ }
-                    )
-                }
+                verticalArrangement = Arrangement.Center
             ) {
                 IconButton(onClick = onMoveUp, modifier = Modifier.size(24.dp)) {
                     Icon(
