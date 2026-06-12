@@ -5,7 +5,15 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import org.burnoutcrew.reorderable.rememberReorderableLazyListState
+import org.burnoutcrew.reorderable.ReorderableItem
+import org.burnoutcrew.reorderable.reorderable
+import org.burnoutcrew.reorderable.detectReorderAfterLongPress
+import org.burnoutcrew.reorderable.detectReorder
+import androidx.compose.ui.draw.shadow
+
 import androidx.compose.animation.*
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -13,6 +21,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -67,6 +78,7 @@ fun DetailsScreen(
     val title by viewModel.selectedTitle.collectAsState()
     val sourceFiles by viewModel.sourceFiles.collectAsState()
     val chapters by viewModel.chapters.collectAsState()
+    val reorderingEnabled by viewModel.reorderingEnabled.collectAsState()
 
     var activeTab by remember { mutableStateOf(0) } // 0: Files, 1: Chapters, 2: Info, 3: Stats
     val tabNames = listOf("Файлы", "Главы", "Инфо", "Статистика")
@@ -154,13 +166,15 @@ fun DetailsScreen(
                         context = context,
                         viewModel = viewModel,
                         titleId = titleId,
-                        sourceFiles = sourceFiles
+                        sourceFiles = sourceFiles,
+                        reorderingEnabled = reorderingEnabled
                     )
                     1 -> ChaptersTabContent(
                         viewModel = viewModel,
                         titleId = titleId,
                         chapters = chapters,
                         sourceFiles = sourceFiles,
+                        reorderingEnabled = reorderingEnabled,
                         onChapterEditClick = onChapterEditClick
                     )
                     2 -> InfoTabContent(
@@ -185,7 +199,8 @@ fun FilesTabContent(
     context: Context,
     viewModel: BookViewModel,
     titleId: Long,
-    sourceFiles: List<SourceFile>
+    sourceFiles: List<SourceFile>,
+    reorderingEnabled: Boolean
 ) {
     var fileToRename by remember { mutableStateOf<SourceFile?>(null) }
     var showRenameDialog by remember { mutableStateOf(false) }
@@ -273,41 +288,61 @@ fun FilesTabContent(
                 )
             }
         } else {
+            val localFiles = remember(sourceFiles) { androidx.compose.runtime.mutableStateOf(sourceFiles) }
+            val reorderState = rememberReorderableLazyListState(
+                onMove = { from, to ->
+                    localFiles.value = localFiles.value.toMutableList().apply {
+                        add(to.index, removeAt(from.index))
+                    }
+                },
+                canDragOver = { draggedOver, _ -> localFiles.value.any { it.id == draggedOver.key } },
+                onDragEnd = { _, _ ->
+                    viewModel.reorderSourceFiles(localFiles.value)
+                }
+            )
+
             LazyColumn(
+                state = reorderState.listState,
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize().reorderable(reorderState)
             ) {
-                items(sourceFiles, key = { it.id }) { item ->
-                    FileCard(
-                        item = item,
-                        onRename = {
-                            fileToRename = item
-                            renameInputText = item.fileName
-                            showRenameDialog = true
-                        },
-                        onMoveUp = {
-                            val idx = sourceFiles.indexOf(item)
-                            if (idx > 0) {
-                                val list = sourceFiles.toMutableList()
-                                list.removeAt(idx)
-                                list.add(idx - 1, item)
-                                viewModel.reorderSourceFiles(list)
-                            }
-                        },
-                        onMoveDown = {
-                            val idx = sourceFiles.indexOf(item)
-                            if (idx < sourceFiles.size - 1) {
-                                val list = sourceFiles.toMutableList()
-                                list.removeAt(idx)
-                                list.add(idx + 1, item)
-                                viewModel.reorderSourceFiles(list)
-                            }
-                        },
-                        onDelete = {
-                            viewModel.deleteSourceFile(item)
-                        }
-                    )
+                items(localFiles.value, key = { it.id }) { item ->
+                    ReorderableItem(reorderState, key = item.id) { isDragging ->
+                        val elevation by animateDpAsState(if (isDragging) 8.dp else 0.dp)
+                        FileCard(
+                            item = item,
+                            reorderState = if (reorderingEnabled) reorderState else null,
+                            reorderingEnabled = reorderingEnabled,
+                            onRename = {
+                                fileToRename = item
+                                renameInputText = item.fileName
+                                showRenameDialog = true
+                            },
+                            onMoveUp = {
+                                val idx = sourceFiles.indexOf(item)
+                                if (idx > 0) {
+                                    val list = sourceFiles.toMutableList()
+                                    list.removeAt(idx)
+                                    list.add(idx - 1, item)
+                                    viewModel.reorderSourceFiles(list)
+                                }
+                            },
+                            onMoveDown = {
+                                val idx = sourceFiles.indexOf(item)
+                                if (idx < sourceFiles.size - 1) {
+                                    val list = sourceFiles.toMutableList()
+                                    list.removeAt(idx)
+                                    list.add(idx + 1, item)
+                                    viewModel.reorderSourceFiles(list)
+                                }
+                            },
+                            onDelete = {
+                                viewModel.deleteSourceFile(item)
+                            },
+                            modifier = Modifier.shadow(elevation, RoundedCornerShape(12.dp))
+                        )
+                    }
                 }
             }
         }
@@ -534,17 +569,20 @@ private fun RowBorder(color: Color) = androidx.compose.foundation.BorderStroke(1
 @Composable
 fun FileCard(
     item: SourceFile,
+    reorderState: org.burnoutcrew.reorderable.ReorderableLazyListState?,
+    reorderingEnabled: Boolean,
     onRename: () -> Unit,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Card(
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant
         ),
-        modifier = Modifier.fillMaxWidth()
+        modifier = modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier
@@ -556,7 +594,12 @@ fun FileCard(
             // Drag indicators / Move actions
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier.pointerInput(Unit) {
+                    detectTapGestures(
+                        onPress = { /* consume taps to prevent row selection */ }
+                    )
+                }
             ) {
                 IconButton(onClick = onMoveUp, modifier = Modifier.size(24.dp)) {
                     Icon(
@@ -565,12 +608,26 @@ fun FileCard(
                         tint = MaterialTheme.colorScheme.primary
                     )
                 }
-                Icon(
-                    imageVector = Icons.Default.MoreVert,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.size(16.dp)
-                )
+                
+                if (reorderingEnabled && reorderState != null) {
+                    Icon(
+                        imageVector = Icons.Default.DragHandle,
+                        contentDescription = "Удерживайте для перемещения",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .size(32.dp)
+                            .padding(4.dp)
+                            .detectReorderAfterLongPress(reorderState)
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.size(16.dp).padding(vertical = 4.dp)
+                    )
+                }
+                
                 IconButton(onClick = onMoveDown, modifier = Modifier.size(24.dp)) {
                     Icon(
                         imageVector = Icons.Default.KeyboardArrowDown,
@@ -626,6 +683,7 @@ fun ChaptersTabContent(
     titleId: Long,
     chapters: List<Chapter>,
     sourceFiles: List<SourceFile>,
+    reorderingEnabled: Boolean,
     onChapterEditClick: (Long) -> Unit
 ) {
     val context = LocalContext.current
@@ -770,30 +828,51 @@ fun ChaptersTabContent(
                     )
                 }
             } else {
+                val localChapters = remember(chapters) { androidx.compose.runtime.mutableStateOf(chapters) }
+                val reorderState = rememberReorderableLazyListState(
+                    onMove = { from, to ->
+                        localChapters.value = localChapters.value.toMutableList().apply {
+                            add(to.index, removeAt(from.index))
+                        }
+                    },
+                    canDragOver = { draggedOver, _ -> localChapters.value.any { it.id == draggedOver.key } },
+                    onDragEnd = { _, _ ->
+                        viewModel.reorderChapters(localChapters.value)
+                    }
+                )
+
                 LazyColumn(
+                    state = reorderState.listState,
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 100.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
+                        .reorderable(reorderState)
                 ) {
                     items(
-                        items = chapters,
+                        items = localChapters.value,
                         key = { it.id },
                         contentType = { "chapter_row" }
                     ) { item ->
-                        val isSelected = selectedChapters.contains(item.id)
-                        ChapterRowItem(
-                            item = item,
-                            isSelectionMode = isSelectionMode,
-                            isSelected = isSelected,
-                            onToggleSelection = { onToggleSelection(item.id) },
-                            onMoveUp = { onMoveUpChecked(item) },
-                            onMoveDown = { onMoveDownChecked(item) },
-                            onPreviewClick = { onPreviewClickChecked(item) },
-                            onEditClick = { onEditClickChecked(item.id) },
-                            onLongClick = { onLongClickChecked(item) }
-                        )
+                        ReorderableItem(reorderState, key = item.id) { isDragging ->
+                            val elevation by animateDpAsState(if (isDragging) 8.dp else 0.dp)
+                            val isSelected = selectedChapters.contains(item.id)
+                            ChapterRowItem(
+                                item = item,
+                                reorderState = if (reorderingEnabled) reorderState else null,
+                                isSelectionMode = isSelectionMode,
+                                isSelected = isSelected,
+                                reorderingEnabled = reorderingEnabled,
+                                onToggleSelection = { onToggleSelection(item.id) },
+                                onMoveUp = { onMoveUpChecked(item) },
+                                onMoveDown = { onMoveDownChecked(item) },
+                                onPreviewClick = { onPreviewClickChecked(item) },
+                                onEditClick = { onEditClickChecked(item.id) },
+                                onLongClick = { onLongClickChecked(item) },
+                                modifier = Modifier.shadow(elevation, RoundedCornerShape(12.dp))
+                            )
+                        }
                     }
                 }
             }
@@ -1185,14 +1264,17 @@ fun ChaptersTabContent(
 @Composable
 fun ChapterRowItem(
     item: Chapter,
+    reorderState: org.burnoutcrew.reorderable.ReorderableLazyListState?,
     isSelectionMode: Boolean,
     isSelected: Boolean,
+    reorderingEnabled: Boolean,
     onToggleSelection: () -> Unit,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
     onPreviewClick: () -> Unit,
     onEditClick: () -> Unit,
-    onLongClick: () -> Unit
+    onLongClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Card(
         shape = RoundedCornerShape(12.dp),
@@ -1200,7 +1282,7 @@ fun ChapterRowItem(
             containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.2f)
             else MaterialTheme.colorScheme.surfaceVariant
         ),
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .combinedClickable(
                 onClick = {
@@ -1229,7 +1311,11 @@ fun ChapterRowItem(
             } else {
                 // Drag handle move directions
                 Column(
-                    modifier = Modifier.padding(end = 12.dp),
+                    modifier = Modifier.padding(end = 12.dp).pointerInput(Unit) {
+                        detectTapGestures(
+                            onPress = { /* consume taps */ }
+                        )
+                    },
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     IconButton(onClick = onMoveUp, modifier = Modifier.size(24.dp)) {
@@ -1239,6 +1325,19 @@ fun ChapterRowItem(
                             tint = MaterialTheme.colorScheme.primary
                         )
                     }
+                    
+                    if (reorderingEnabled && reorderState != null) {
+                        Icon(
+                            imageVector = Icons.Default.DragHandle,
+                            contentDescription = "Тяните для перемещения",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .size(32.dp)
+                                .padding(4.dp)
+                                .detectReorderAfterLongPress(reorderState)
+                        )
+                    }
+                    
                     IconButton(onClick = onMoveDown, modifier = Modifier.size(24.dp)) {
                         Icon(
                             imageVector = Icons.Default.KeyboardArrowDown,

@@ -44,6 +44,14 @@ object EpubProcessor {
                     var entry: ZipEntry? = zipInputStream.getNextEntry()
                     while (entry != null) {
                         val outFile = File(tempDir, entry.name)
+                        
+                        // Prevent Zip Slip vulnerability
+                        val canonicalDestPath = outFile.canonicalPath
+                        val canonicalDirPath = tempDir.canonicalPath
+                        if (!canonicalDestPath.startsWith(canonicalDirPath + File.separator)) {
+                            throw SecurityException("Zip Slip Vulnerability: Entry is outside of the target dir: ${entry.name}")
+                        }
+                        
                         if (entry.isDirectory) {
                             outFile.mkdirs()
                         } else {

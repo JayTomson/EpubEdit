@@ -49,6 +49,7 @@ fun LibraryScreen(
 
     val currentLang by viewModel.currentLanguage.collectAsState()
     val htmlAutoCloseEnabled by viewModel.htmlAutoCloseEnabled.collectAsState()
+    val reorderingEnabled by viewModel.reorderingEnabled.collectAsState()
 
     Scaffold(
         topBar = {
@@ -346,6 +347,42 @@ fun LibraryScreen(
                         Switch(
                             checked = htmlAutoCloseEnabled,
                             onCheckedChange = { viewModel.updateHtmlAutoClose(it) },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
+                                checkedTrackColor = MaterialTheme.colorScheme.primary
+                            )
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                            .clickable { viewModel.updateReordering(!reorderingEnabled) }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text(
+                                text = if (currentLang == "en") "Enable Drag and Drop" else "Перетаскивание зажатием",
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = if (currentLang == "en") "Long press to reorder items" else "Зажмите элемент между кнопками, чтобы полноценно перетаскивать его",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = reorderingEnabled,
+                            onCheckedChange = { viewModel.updateReordering(it) },
                             colors = SwitchDefaults.colors(
                                 checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
                                 checkedTrackColor = MaterialTheme.colorScheme.primary

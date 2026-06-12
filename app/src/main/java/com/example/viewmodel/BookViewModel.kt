@@ -30,6 +30,9 @@ class BookViewModel(private val app: Application, private val repository: BookRe
     private val _htmlAutoCloseEnabled = MutableStateFlow(prefs.getBoolean("pref_html_autoclose", false))
     val htmlAutoCloseEnabled: StateFlow<Boolean> = _htmlAutoCloseEnabled.asStateFlow()
 
+    private val _reorderingEnabled = MutableStateFlow(prefs.getBoolean("pref_reordering", true))
+    val reorderingEnabled: StateFlow<Boolean> = _reorderingEnabled.asStateFlow()
+
     fun updateLanguage(lang: String) {
         prefs.edit().putString("pref_language", lang).apply()
         _currentLanguage.value = lang
@@ -38,6 +41,11 @@ class BookViewModel(private val app: Application, private val repository: BookRe
     fun updateHtmlAutoClose(enabled: Boolean) {
         prefs.edit().putBoolean("pref_html_autoclose", enabled).apply()
         _htmlAutoCloseEnabled.value = enabled
+    }
+
+    fun updateReordering(enabled: Boolean) {
+        prefs.edit().putBoolean("pref_reordering", enabled).apply()
+        _reorderingEnabled.value = enabled
     }
 
     val titles: StateFlow<List<Title>> = repository.allTitles
