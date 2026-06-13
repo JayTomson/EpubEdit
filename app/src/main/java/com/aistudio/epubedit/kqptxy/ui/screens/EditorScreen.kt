@@ -110,38 +110,7 @@ fun decodeHtmlEntities(html: String): String {
     }
 }
 
-fun htmlToPlainText(html: String): String {
-    if (html.isBlank()) return ""
-    return try {
-        HtmlCompat.fromHtml(html, HtmlCompat.FROM_HTML_MODE_LEGACY).toString().trim()
-    } catch (e: Exception) {
-        // Fallback to basic tag stripping if something unexpected occurs
-        html.replace(Regex("<[^>]*>"), "").trim()
-    }
-}
 
-fun plainTextToHtml(plainText: String): String {
-    if (plainText.isBlank()) return "<p></p>"
-    val paragraphs = plainText.split(Regex("\\n\\s*\\n+"))
-    val sb = StringBuilder()
-    for (paragraph in paragraphs) {
-        val trimmed = paragraph.trim()
-        if (trimHTMLAndPlain(trimmed).isNotEmpty()) {
-            val lower = trimmed.lowercase()
-            if (lower.startsWith("<p") || lower.startsWith("<h") || lower.startsWith("<div") || lower.startsWith("<blockquote") || lower.startsWith("<li")) {
-                sb.append(trimmed).append("\n")
-            } else {
-                val formattedContent = trimmed.replace("\n", "<br/>\n")
-                sb.append("<p>").append(formattedContent).append("</p>\n")
-            }
-        }
-    }
-    return sb.toString().trim()
-}
-
-private fun trimHTMLAndPlain(input: String): String {
-    return input.replace(Regex("<[^>]*>"), "").trim()
-}
 
 fun parseHtmlToEditorBlocks(
     html: String,
@@ -166,9 +135,9 @@ fun parseHtmlToEditorBlocks(
         
         if (start > lastIdx) {
             val textBefore = html.substring(lastIdx, start)
-            val plain = htmlToPlainText(textBefore)
-            if (plain.isNotEmpty()) {
-                blocks.add(EditorBlock.Text(plain))
+            val htmlTrimmed = textBefore.trim()
+            if (htmlTrimmed.isNotEmpty()) {
+                blocks.add(EditorBlock.Text(htmlTrimmed))
             }
         }
         
@@ -191,9 +160,9 @@ fun parseHtmlToEditorBlocks(
     
     if (lastIdx < html.length) {
         val textAfter = html.substring(lastIdx)
-        val plain = htmlToPlainText(textAfter)
-        if (plain.isNotEmpty()) {
-            blocks.add(EditorBlock.Text(plain))
+        val htmlTrimmed = textAfter.trim()
+        if (htmlTrimmed.isNotEmpty()) {
+            blocks.add(EditorBlock.Text(htmlTrimmed))
         }
     }
     
@@ -212,12 +181,10 @@ fun serializeEditorBlocksToHtml(
     for (block in blocks) {
         when (block) {
             is EditorBlock.Text -> {
-                val latestText = blockTextFieldValues[block.id]?.text ?: block.content
-                if (latestText.isNotBlank()) {
-                    val valHtml = plainTextToHtml(latestText)
-                    if (valHtml.isNotEmpty() && valHtml != "<p></p>") {
-                        sb.append(valHtml).append("\n")
-                    }
+                val latestText = blockTextFieldValues[block.id]?.annotatedString ?: com.aistudio.epubedit.kqptxy.util.RichTextUtil.htmlToAnnotatedString(block.content)
+                val valHtml = com.aistudio.epubedit.kqptxy.util.RichTextUtil.annotatedStringToHtml(latestText)
+                if (valHtml.isNotEmpty() && valHtml != "<p></p>") {
+                    sb.append(valHtml).append("\n")
                 }
             }
             is EditorBlock.Image -> {
@@ -348,7 +315,8 @@ fun EditorScreen(
         blockTextFieldValues.clear()
         parsed.forEach { b ->
             if (b is EditorBlock.Text) {
-                blockTextFieldValues[b.id] = TextFieldValue(b.content, androidx.compose.ui.text.TextRange(b.content.length))
+                val ann = com.aistudio.epubedit.kqptxy.util.RichTextUtil.htmlToAnnotatedString(b.content)
+                blockTextFieldValues[b.id] = TextFieldValue(annotatedString = ann, selection = androidx.compose.ui.text.TextRange(ann.length))
             }
         }
     }
@@ -363,7 +331,8 @@ fun EditorScreen(
             blockTextFieldValues.clear()
             parsed.forEach { b ->
                 if (b is EditorBlock.Text) {
-                    blockTextFieldValues[b.id] = TextFieldValue(b.content, androidx.compose.ui.text.TextRange(b.content.length))
+                    val ann = com.aistudio.epubedit.kqptxy.util.RichTextUtil.htmlToAnnotatedString(b.content)
+                    blockTextFieldValues[b.id] = TextFieldValue(annotatedString = ann, selection = androidx.compose.ui.text.TextRange(ann.length))
                 }
             }
             isHtmlMode = false
@@ -444,7 +413,7 @@ fun EditorScreen(
                     if (focusedIdx >= 0 && focusedIdx < editorBlocks.size) {
                         val block = editorBlocks[focusedIdx]
                         if (block is EditorBlock.Text) {
-                            val tf = blockTextFieldValues[block.id] ?: TextFieldValue(block.content)
+                            val tf = blockTextFieldValues[block.id] ?: TextFieldValue(annotatedString = com.aistudio.epubedit.kqptxy.util.RichTextUtil.htmlToAnnotatedString(block.content))
                             val text = tf.text
                             val cursor = tf.selection.start
                             
@@ -455,8 +424,10 @@ fun EditorScreen(
                             
                             var insertPosition = focusedIdx
                             if (textBefore.isNotEmpty()) {
-                                editorBlocks.add(insertPosition, EditorBlock.Text(textBefore, block.id))
-                                blockTextFieldValues[block.id] = TextFieldValue(textBefore, androidx.compose.ui.text.TextRange(textBefore.length))
+                                val annBefore = tf.annotatedString.subSequence(0, cursor)
+                                val htmlBefore = com.aistudio.epubedit.kqptxy.util.RichTextUtil.annotatedStringToHtml(annBefore)
+                                editorBlocks.add(insertPosition, EditorBlock.Text(htmlBefore, block.id))
+                                blockTextFieldValues[block.id] = TextFieldValue(annotatedString = annBefore, selection = androidx.compose.ui.text.TextRange(annBefore.length))
                                 insertPosition++
                             }
                             
@@ -464,9 +435,11 @@ fun EditorScreen(
                             editorBlocks.add(insertPosition, imgBlock)
                             insertPosition++
                             
-                            val afterBlock = EditorBlock.Text(textAfter)
+                            val annAfter = tf.annotatedString.subSequence(cursor, tf.text.length)
+                            val htmlAfter = com.aistudio.epubedit.kqptxy.util.RichTextUtil.annotatedStringToHtml(annAfter)
+                            val afterBlock = EditorBlock.Text(htmlAfter)
                             editorBlocks.add(insertPosition, afterBlock)
-                            blockTextFieldValues[afterBlock.id] = TextFieldValue(textAfter, androidx.compose.ui.text.TextRange(0))
+                            blockTextFieldValues[afterBlock.id] = TextFieldValue(annotatedString = annAfter, selection = androidx.compose.ui.text.TextRange(0))
                             
                             activeBlockIndex = insertPosition
                         }
@@ -551,10 +524,20 @@ fun EditorScreen(
                                 val prevText = prevBlock.content
                                 val nextText = nextBlock.content
                                 
-                                val mergedText = if (prevText.isEmpty()) nextText else if (nextText.isEmpty()) prevText else prevText + "\n" + nextText
+                                val tfPrev = blockTextFieldValues[prevBlock.id] ?: TextFieldValue(annotatedString = com.aistudio.epubedit.kqptxy.util.RichTextUtil.htmlToAnnotatedString(prevBlock.content))
+                                val tfNext = blockTextFieldValues[nextBlock.id] ?: TextFieldValue(annotatedString = com.aistudio.epubedit.kqptxy.util.RichTextUtil.htmlToAnnotatedString(nextBlock.content))
                                 
-                                editorBlocks[prevIdx] = EditorBlock.Text(mergedText, prevBlock.id)
-                                blockTextFieldValues[prevBlock.id] = TextFieldValue(mergedText, androidx.compose.ui.text.TextRange(prevText.length))
+                                val mergedAnn = if (tfPrev.text.isEmpty()) tfNext.annotatedString else if (tfNext.text.isEmpty()) tfPrev.annotatedString else {
+                                    androidx.compose.ui.text.buildAnnotatedString {
+                                        append(tfPrev.annotatedString)
+                                        append("\n")
+                                        append(tfNext.annotatedString)
+                                    }
+                                }
+                                val mergedHtml = com.aistudio.epubedit.kqptxy.util.RichTextUtil.annotatedStringToHtml(mergedAnn)
+                                
+                                editorBlocks[prevIdx] = EditorBlock.Text(mergedHtml, prevBlock.id)
+                                blockTextFieldValues[prevBlock.id] = TextFieldValue(annotatedString = mergedAnn, selection = androidx.compose.ui.text.TextRange(tfPrev.text.length))
                                 
                                 editorBlocks.removeAt(nextIdx)
                                 editorBlocks.removeAt(idx)
@@ -666,7 +649,7 @@ fun EditorScreen(
                                     if (idx >= 0 && idx < editorBlocks.size) {
                                         val block = editorBlocks[idx]
                                         if (block is EditorBlock.Text) {
-                                            blockTextFieldValues[block.id] ?: TextFieldValue(block.content)
+                                            blockTextFieldValues[block.id] ?: TextFieldValue(annotatedString = com.aistudio.epubedit.kqptxy.util.RichTextUtil.htmlToAnnotatedString(block.content))
                                         } else {
                                             TextFieldValue("")
                                         }
@@ -848,13 +831,14 @@ fun EditorScreen(
                             when (block) {
                                 is EditorBlock.Text -> {
                                     val tfValue = blockTextFieldValues.getOrPut(block.id) {
-                                        TextFieldValue(block.content, androidx.compose.ui.text.TextRange(block.content.length))
+                                        val ann = com.aistudio.epubedit.kqptxy.util.RichTextUtil.htmlToAnnotatedString(block.content)
+                                        TextFieldValue(annotatedString = ann, selection = androidx.compose.ui.text.TextRange(ann.length))
                                     }
                                     OutlinedTextField(
                                         value = tfValue,
                                         onValueChange = { newVal ->
                                             blockTextFieldValues[block.id] = newVal
-                                            editorBlocks[index] = EditorBlock.Text(newVal.text, block.id)
+                                            editorBlocks[index] = EditorBlock.Text(com.aistudio.epubedit.kqptxy.util.RichTextUtil.annotatedStringToHtml(newVal.annotatedString), block.id)
                                         },
                                         modifier = Modifier
                                             .fillMaxWidth()
