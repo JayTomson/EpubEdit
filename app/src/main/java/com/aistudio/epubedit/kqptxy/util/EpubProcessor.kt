@@ -94,12 +94,13 @@ object EpubProcessor {
 
         // 3. Keep extracted images persistently in a media folder
         val mediaDir = File(context.filesDir, "epub_media")
-        if (!mediaDir.exists()) mediaDir.mkdirs()
+        val bookMediaDir = if (titleId != null) File(mediaDir, "book_$titleId") else mediaDir
+        if (!bookMediaDir.exists()) bookMediaDir.mkdirs()
 
         val imageMap = mutableMapOf<String, String>() // filename -> persistent absolute path
         imageFiles.forEach { file ->
-            val prefix = if (titleId != null) "book_${titleId}_" else "media_${System.currentTimeMillis()}_"
-            val destFile = File(mediaDir, "$prefix${file.name}")
+            val destName = if (titleId != null) file.name else "media_${System.currentTimeMillis()}_${file.name}"
+            val destFile = File(bookMediaDir, destName)
             try {
                 file.copyTo(destFile, overwrite = true)
                 imageMap[file.name.lowercase()] = destFile.absolutePath
@@ -1349,42 +1350,17 @@ object EpubProcessor {
         }
         val filename = File(decodedSrc.lowercase()).name
         val mediaDir = File(context.filesDir, "epub_media")
-        if (!mediaDir.exists()) return null
+        val searchDir = if (titleId != null) File(mediaDir, "book_$titleId") else mediaDir
+        if (!searchDir.exists()) return null
 
-        if (titleId != null) {
-            val bookPrefix = "book_${titleId}_".lowercase()
-            // 1. Direct O(1) check for prefixed file
-            val directPrefixedFile = if (filename.startsWith(bookPrefix)) {
-                File(mediaDir, filename)
-            } else {
-                File(mediaDir, "$bookPrefix$filename")
-            }
-            if (directPrefixedFile.exists()) {
-                return directPrefixedFile.absolutePath
-            }
+        val localFile = File(searchDir, filename)
+        if (localFile.exists()) return localFile.absolutePath
 
-            // 2. Fallback to listFiles if path was nested inside EPUB, e.g., "OEBPS/images/My_Image.jpg"
-            val matches = mediaDir.listFiles { _, name ->
-                val lowerName = name.lowercase()
-                lowerName.startsWith(bookPrefix) && (lowerName.endsWith("_$filename") || lowerName.endsWith("/$filename") || lowerName.endsWith("\\$filename"))
-            }
-            if (!matches.isNullOrEmpty()) {
-                return matches.first().absolutePath
-            }
-        } else {
-            // If no titleId is given, search strictly but exclude any file that belongs to a book
-            val matches = mediaDir.listFiles { _, name ->
-                val lowerName = name.lowercase()
-                val belongsToAnyBook = lowerName.startsWith("book_")
-                if (belongsToAnyBook) {
-                    false
-                } else {
-                    lowerName == filename || lowerName.endsWith("_$filename")
-                }
-            }
-            if (!matches.isNullOrEmpty()) {
-                return matches.first().absolutePath
-            }
+        val matches = searchDir.listFiles { _, name ->
+            name.lowercase().endsWith(filename)
+        }
+        if (!matches.isNullOrEmpty()) {
+            return matches.first().absolutePath
         }
         return null
     }

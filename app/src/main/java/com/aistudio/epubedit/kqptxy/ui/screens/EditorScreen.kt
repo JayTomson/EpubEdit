@@ -996,7 +996,8 @@ fun EditorScreen(
 
 fun saveIllustrationLocally(context: Context, uri: Uri, titleId: Long? = null): String? {
     val mediaDir = File(context.filesDir, "epub_media")
-    if (!mediaDir.exists()) mediaDir.mkdirs()
+    val bookMediaDir = if (titleId != null) File(mediaDir, "book_$titleId") else mediaDir
+    if (!bookMediaDir.exists()) bookMediaDir.mkdirs()
     var ext = "jpg"
     try {
         context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
@@ -1011,8 +1012,8 @@ fun saveIllustrationLocally(context: Context, uri: Uri, titleId: Long? = null): 
     } catch (e: Exception) {
         Log.e("EditorScreen", "Error getting extension", e)
     }
-    val prefix = if (titleId != null) "book_${titleId}_" else "media_"
-    val destFile = File(mediaDir, "${prefix}${System.currentTimeMillis()}.${ext}")
+    val destName = if (titleId != null) "${System.currentTimeMillis()}.${ext}" else "media_${System.currentTimeMillis()}.${ext}"
+    val destFile = File(bookMediaDir, destName)
     return try {
         val ips = context.contentResolver.openInputStream(uri) ?: return null
         val ops = FileOutputStream(destFile)

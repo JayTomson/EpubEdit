@@ -127,9 +127,11 @@ class BookViewModel(private val app: Application, private val repository: BookRe
             withContext(Dispatchers.IO) {
                 try {
                     val mediaDir = File(app.filesDir, "epub_media")
-                    mediaDir.listFiles { _, name -> name.startsWith("book_${title.id}_") }
-                        ?.forEach { it.delete() }
-                        
+                    val bookMediaDir = File(mediaDir, "book_${title.id}")
+                    if (bookMediaDir.exists()) {
+                        bookMediaDir.deleteRecursively()
+                    }
+                    
                     // Clean up custom cover file if it exists and lies in filesDir
                     title.coverImage?.let { path ->
                         val coverFile = File(path)
@@ -138,7 +140,7 @@ class BookViewModel(private val app: Application, private val repository: BookRe
                         }
                     }
 
-                    // Scan chapter content for explicit media insertion files
+                    // Scan chapter content for explicit media insertion files globally
                     val chapters = repository.getChaptersForTitleOneShot(title.id)
                     val imgRegex = Regex("<img[^>]+src=[\"']([^\"']+)[\"']", RegexOption.IGNORE_CASE)
                     chapters.forEach { chapter ->
@@ -146,7 +148,7 @@ class BookViewModel(private val app: Application, private val repository: BookRe
                             val src = match.groupValues[1]
                             val fileName = File(src).name
                             val target = File(mediaDir, fileName)
-                            if (target.exists() && (fileName.startsWith("media_") || fileName.startsWith("book_${title.id}_"))) {
+                            if (target.exists() && fileName.startsWith("media_")) {
                                 target.delete()
                             }
                         }
