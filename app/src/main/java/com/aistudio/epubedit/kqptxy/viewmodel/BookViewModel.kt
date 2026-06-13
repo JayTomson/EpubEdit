@@ -130,14 +130,25 @@ class BookViewModel(private val app: Application, private val repository: BookRe
                     mediaDir.listFiles { _, name -> name.startsWith("book_${title.id}_") }
                         ?.forEach { it.delete() }
                         
+                    // Clean up custom cover file if it exists and lies in filesDir
+                    title.coverImage?.let { path ->
+                        val coverFile = File(path)
+                        if (coverFile.exists() && coverFile.parentFile?.absolutePath == app.filesDir.absolutePath) {
+                            coverFile.delete()
+                        }
+                    }
+
                     // Scan chapter content for explicit media insertion files
                     val chapters = repository.getChaptersForTitleOneShot(title.id)
-                    val imgRegex = Regex("<img[^>]+src=[\"'](media_[a-zA-Z0-9_.]+)[\"']", RegexOption.IGNORE_CASE)
+                    val imgRegex = Regex("<img[^>]+src=[\"']([^\"']+)[\"']", RegexOption.IGNORE_CASE)
                     chapters.forEach { chapter ->
                         imgRegex.findAll(chapter.contentHtml).forEach { match ->
-                            val fileName = match.groupValues[1]
+                            val src = match.groupValues[1]
+                            val fileName = File(src).name
                             val target = File(mediaDir, fileName)
-                            if (target.exists()) target.delete()
+                            if (target.exists() && (fileName.startsWith("media_") || fileName.startsWith("book_${title.id}_"))) {
+                                target.delete()
+                            }
                         }
                     }
                 } catch (e: Exception) {
