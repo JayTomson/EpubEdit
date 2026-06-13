@@ -7,7 +7,7 @@ plugins {
 }
 
 android {
-  namespace = "com.example"
+  namespace = "com.aistudio.epubedit.kqptxy"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
@@ -70,7 +70,7 @@ secrets {
 // This makes it easy to add them back in the future if needed.
 dependencies {
   implementation(platform(libs.androidx.compose.bom))
-  implementation(platform(libs.firebase.bom))
+  // implementation(platform(libs.firebase.bom))
   // implementation(libs.accompanist.permissions)
   implementation(libs.androidx.activity.compose)
   // implementation(libs.androidx.camera.camera2)
@@ -123,11 +123,4 @@ dependencies {
   "ksp"(libs.moshi.kotlin.codegen)
 }
 
-tasks.register("restoreEditorScreen") {
-    doLast {
-        val p = Runtime.getRuntime().exec(arrayOf("git", "status"), null, File("."))
-        p.waitFor()
-        println("Git exit code: ${p.exitValue()}")
-        println("Error: " + p.errorStream.bufferedReader().readText())
-    }
-}
+
