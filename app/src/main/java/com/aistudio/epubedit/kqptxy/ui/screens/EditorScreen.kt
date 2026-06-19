@@ -545,7 +545,8 @@ fun EditorScreen(
                 }
             }
             val initialHtmlText = if (htmlPrefix.isEmpty() && htmlSuffix.isEmpty()) bodyContent else htmlPrefix + bodyContent + htmlSuffix
-            htmlTextState = TextFieldValue(if (raw == "<p>Введите...</p>" || raw.contains("Введите текст вашей новой главы")) "" else initialHtmlText)
+            val (beautified, _) = com.aistudio.epubedit.kqptxy.util.RichTextUtil.beautifyHtmlWithCursor(initialHtmlText, 0)
+            htmlTextState = TextFieldValue(if (raw == "<p>Введите...</p>" || raw.contains("Введите текст вашей новой главы")) "" else beautified)
             chapterTitle = currentChapter.title
         }
     }
@@ -695,8 +696,8 @@ fun EditorScreen(
                 bodyOffsetHtml = convertedBodyHtml.length
             }
             
-            val finalCursor = htmlPrefix.length + bodyOffsetHtml
-            htmlTextState = TextFieldValue(fullHtml, androidx.compose.ui.text.TextRange(finalCursor))
+            val (beautifiedFull, _) = com.aistudio.epubedit.kqptxy.util.RichTextUtil.beautifyHtmlWithCursor(fullHtml, 0)
+            htmlTextState = TextFieldValue(beautifiedFull, androidx.compose.ui.text.TextRange(beautifiedFull.length))
             
             isHtmlMode = true
         }
@@ -1146,6 +1147,22 @@ fun EditorScreen(
                             }) {
                                 Icon(Icons.Default.AddPhotoAlternate, Loc.t("insert_image", lang))
                             }
+                            
+                            if (isHtmlMode) {
+                                IconButton(onClick = {
+                                    val (formatted, newCursor) = com.aistudio.epubedit.kqptxy.util.RichTextUtil.beautifyHtmlWithCursor(
+                                        htmlTextState.text,
+                                        htmlTextState.selection.start
+                                    )
+                                    htmlTextState = TextFieldValue(
+                                        text = formatted,
+                                        selection = androidx.compose.ui.text.TextRange(newCursor)
+                                    )
+                                    Toast.makeText(context, Loc.t("beautify", lang), Toast.LENGTH_SHORT).show()
+                                }) {
+                                    Icon(Icons.Default.AutoFixHigh, Loc.t("beautify", lang), tint = MaterialTheme.colorScheme.tertiary)
+                                }
+                            }
                         }
                         
                         IconButton(onClick = { isFullscreen = !isFullscreen }) {
@@ -1275,10 +1292,23 @@ fun EditorScreen(
                     OutlinedTextField(
                         value = htmlTextState,
                         onValueChange = { newVal ->
-                            htmlTextState = if (htmlAutoCloseEnabled) {
+                            val withAutoClose = if (htmlAutoCloseEnabled) {
                                 handleHtmlAutoClose(htmlTextState, newVal)
                             } else {
                                 newVal
+                            }
+                            
+                            val autoIndented = com.aistudio.epubedit.kqptxy.util.RichTextUtil.handleAutoIndent(
+                                htmlTextState.text,
+                                withAutoClose.text,
+                                withAutoClose.selection.start
+                            )
+                            
+                            htmlTextState = if (autoIndented != null) {
+                                val newSel = withAutoClose.selection.start + (autoIndented.length - withAutoClose.text.length)
+                                TextFieldValue(autoIndented, androidx.compose.ui.text.TextRange(newSel))
+                            } else {
+                                withAutoClose
                             }
                         },
                         textStyle = TextStyle(
@@ -1286,6 +1316,7 @@ fun EditorScreen(
                             fontSize = 14.sp,
                             color = Color(0xFFE2E2E2)
                         ),
+                        visualTransformation = com.aistudio.epubedit.kqptxy.util.RichTextUtil.HtmlSyntaxTransformation(),
                         colors = TextFieldDefaults.colors(
                             focusedContainerColor = Color.Transparent,
                             unfocusedContainerColor = Color.Transparent,

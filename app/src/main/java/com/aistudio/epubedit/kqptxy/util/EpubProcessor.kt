@@ -1425,20 +1425,61 @@ object EpubProcessor {
         val sanitizedFileName = if (fileName.endsWith(".epub", ignoreCase = true)) fileName else "$fileName.epub"
         val tempOutputFile = File(context.cacheDir, "temp_export_orig_${System.currentTimeMillis()}_$sanitizedFileName")
 
-        val hasNewChapters = chapters.any { it.originalFilePath == null }
-        if (hasNewChapters) {
-            Log.d(TAG, "exportFromOriginalArchive: New chapters detected, falling back to scratch generation to ensure they are included in manifest.")
-            return null
-        }
+        val existingChapters = chapters.filter { it.originalFilePath != null }
+        val newChapters = chapters.filter { it.originalFilePath == null }
 
-        // Group chapters by original file path to handle split files
-        val chapterOverrides = chapters
-            .filter { it.originalFilePath != null }
+        // Group existing chapters by original file path to handle split files
+        val chapterOverrides = existingChapters
             .groupBy { it.originalFilePath!! }
             .mapValues { (_, chs) ->
                 // If keepOriginal was on, contentHtml should already be full HTML or segment with tags
                 chs.joinToString("\n") { it.contentHtml }
             }
+
+        // Find OPF relative path
+        var opfRelativePath = "OEBPS/content.opf"
+        val containerFile = File(originalEpubDir, "META-INF/container.xml")
+        if (containerFile.exists()) {
+            try {
+                val containerText = containerFile.readText()
+                val fullPathMatch = Regex("full-path\\s*=\\s*\"([^\"]+)\"").find(containerText)
+                if (fullPathMatch != null) {
+                    opfRelativePath = fullPathMatch.groupValues[1]
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error finding OPF path in container.xml", e)
+            }
+        }
+
+        // Prepare updated OPF text if there are new chapters
+        val opfFile = File(originalEpubDir, opfRelativePath)
+        var opfText = if (opfFile.exists()) opfFile.readText() else ""
+        
+        val firstChapterPath = existingChapters.firstOrNull()?.originalFilePath
+        val baseDir = firstChapterPath?.substringBeforeLast('/') ?: "OEBPS/Text"
+        val opfFolder = if (opfRelativePath.contains("/")) opfRelativePath.substringBeforeLast("/") else ""
+        val relativeBaseDir = if (opfFolder.isNotEmpty() && baseDir.startsWith(opfFolder)) {
+            baseDir.removePrefix(opfFolder).removePrefix("/")
+        } else {
+            baseDir.substringAfter("OEBPS/", baseDir).substringAfter("OPS/", baseDir)
+        }
+
+        if (newChapters.isNotEmpty() && opfText.isNotEmpty()) {
+            val manifestInsert = buildString {
+                newChapters.forEachIndexed { index, _ ->
+                    val href = if (relativeBaseDir.isNotEmpty()) "$relativeBaseDir/new_chapter_${index + 1}.xhtml" else "new_chapter_${index + 1}.xhtml"
+                    append("\n<item id=\"newchap$index\" href=\"$href\" media-type=\"application/xhtml+xml\"/>")
+                }
+            }
+            opfText = opfText.replace("</manifest>", "$manifestInsert\n</manifest>")
+
+            val spineInsert = buildString {
+                newChapters.forEachIndexed { index, _ ->
+                    append("\n<itemref idref=\"newchap$index\"/>")
+                }
+            }
+            opfText = opfText.replace("</spine>", "$spineInsert\n</spine>")
+        }
 
         try {
             FileOutputStream(tempOutputFile).use { fos ->
@@ -1469,17 +1510,42 @@ object EpubProcessor {
                                 if (relPath == "mimetype") return@forEach
 
                                 zos.putNextEntry(ZipEntry(relPath))
-                                val override = chapterOverrides[relPath]
-                                if (override != null) {
-                                    zos.write(override.toByteArray(Charsets.UTF_8))
+                                
+                                if (relPath == opfRelativePath && opfText.isNotEmpty()) {
+                                    zos.write(opfText.toByteArray(Charsets.UTF_8))
                                 } else {
-                                    f.inputStream().use { it.copyTo(zos) }
+                                    val override = chapterOverrides[relPath]
+                                    if (override != null) {
+                                        zos.write(override.toByteArray(Charsets.UTF_8))
+                                    } else {
+                                        f.inputStream().use { it.copyTo(zos) }
+                                    }
                                 }
                                 zos.closeEntry()
                             }
                         }
                     }
                     walk(originalEpubDir)
+
+                    // 2. Add new chapters
+                    newChapters.forEachIndexed { index, chapter ->
+                        val newPath = "$baseDir/new_chapter_${index + 1}.xhtml"
+
+                        zos.putNextEntry(ZipEntry(newPath))
+                        val html = """
+                            <?xml version="1.0" encoding="utf-8"?>
+                            <html xmlns="http://www.w3.org/1999/xhtml">
+                            <head>
+                                <title>${chapter.title}</title>
+                            </head>
+                            <body>
+                                ${chapter.contentHtml}
+                            </body>
+                            </html>
+                        """.trimIndent()
+                        zos.write(html.toByteArray(Charsets.UTF_8))
+                        zos.closeEntry()
+                    }
                 }
             }
             return saveFileToPublicDownloads(context, tempOutputFile, sanitizedFileName)

@@ -126,7 +126,8 @@ object Loc {
         "subscript" to "Подстрочный знак (X₂)",
         "superscript" to "Надстрочный знак (X²)",
         "heading_choose" to "Выбрать заголовок",
-        "heading_styled" to "Заголовок {num}"
+        "heading_styled" to "Заголовок {num}",
+        "beautify" to "Форматировать код"
     )
 
     private val en = mapOf(
@@ -254,7 +255,8 @@ object Loc {
         "subscript" to "Subscript (X₂)",
         "superscript" to "Superscript (X²)",
         "heading_choose" to "Choose Heading",
-        "heading_styled" to "Heading {num}"
+        "heading_styled" to "Heading {num}",
+        "beautify" to "Beautify Code"
     )
 
     fun t(key: String, lang: String): String {

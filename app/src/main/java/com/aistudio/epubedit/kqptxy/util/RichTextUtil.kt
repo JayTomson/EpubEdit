@@ -341,4 +341,185 @@ object RichTextUtil {
             }
         }
     }
+
+    fun beautifyHtmlWithCursor(html: String, cursorIndex: Int): Pair<String, Int> {
+        if (html.isBlank()) return "" to 0
+        
+        val blockTags = setOf(
+            "html", "head", "body", "div", "p", "h1", "h2", "h3", "h4", "h5", "h6",
+            "ul", "ol", "li", "blockquote", "section", "nav", "header", "footer",
+            "metadata", "manifest", "spine", "guide", "item", "title", "style", "script",
+            "table", "tr", "td", "th", "thead", "tbody", "tfoot",
+            "pre", "code", "article", "aside", "caption", "dl", "dt", "dd"
+        )
+        val selfClosingTags = setOf("img", "br", "hr", "meta", "link", "input", "base")
+
+        val sb = StringBuilder()
+        var indentLevel = 0
+        
+        // Tokenizer that tracks original offsets
+        val tokens = mutableListOf<Pair<String, Int>>()
+        var i = 0
+        while (i < html.length) {
+            if (html[i] == '<') {
+                val end = html.indexOf('>', i)
+                if (end != -1) {
+                    val tag = html.substring(i, end + 1)
+                    val cleanedTag = tag.trim().replace(Regex("\\s+"), " ")
+                    tokens.add(cleanedTag to i)
+                    i = end + 1
+                } else {
+                    tokens.add(html.substring(i) to i)
+                    i = html.length
+                }
+            } else {
+                val nextTag = html.indexOf('<', i)
+                if (nextTag != -1) {
+                    val text = html.substring(i, nextTag)
+                    if (text.isNotBlank()) tokens.add(text.trim() to i)
+                    i = nextTag
+                } else {
+                    val text = html.substring(i)
+                    if (text.isNotBlank()) tokens.add(text.trim() to i)
+                    i = html.length
+                }
+            }
+        }
+
+        var newCursorIndex = 0
+        var cursorSet = false
+
+        fun appendToken(indent: Int, token: String, originalStart: Int) {
+            if (sb.isNotEmpty() && sb.last() != '\n') {
+                sb.append("\n")
+            }
+            val lineStart = sb.length
+            sb.append("    ".repeat(indent))
+            
+            // If the original cursor was before or inside this token
+            if (!cursorSet && cursorIndex <= originalStart + token.length) {
+                // Approximate position within the beautified line
+                newCursorIndex = sb.length + (cursorIndex - originalStart).coerceIn(0, token.length)
+                cursorSet = true
+            }
+            
+            sb.append(token)
+        }
+
+        for (tokenEntry in tokens) {
+            val token = tokenEntry.first
+            val originalStart = tokenEntry.second
+            
+            if (token.startsWith("<")) {
+                if (token.startsWith("<!") || token.startsWith("<?")) {
+                    appendToken(indentLevel, token, originalStart)
+                    continue
+                }
+                
+                val tagNameMatch = Regex("<(/?[a-zA-Z0-9:-]+)").find(token)
+                val rawTagName = tagNameMatch?.groupValues?.get(1) ?: ""
+                val isClosing = rawTagName.startsWith("/")
+                val tagName = rawTagName.removePrefix("/").lowercase()
+                val isSelfClosing = token.endsWith("/>") || tagName in selfClosingTags
+                
+                if (isClosing) {
+                    indentLevel--
+                    if (indentLevel < 0) indentLevel = 0
+                    appendToken(indentLevel, token, originalStart)
+                } else {
+                    appendToken(indentLevel, token, originalStart)
+                    if (!isSelfClosing) {
+                        indentLevel++
+                    }
+                }
+            } else {
+                appendToken(indentLevel, token, originalStart)
+            }
+        }
+        
+        if (!cursorSet) newCursorIndex = sb.length
+        return sb.toString().trim() to newCursorIndex
+    }
+
+    fun handleAutoIndent(oldValue: String, newValue: String, selection: Int): String? {
+        // Detect if Enter was pressed
+        if (newValue.length == oldValue.length + 1 && selection > 0 && newValue[selection - 1] == '\n') {
+            val lineStart = newValue.substring(0, selection - 1).lastIndexOf('\n') + 1
+            val prevLine = newValue.substring(lineStart, selection - 1)
+            val indent = prevLine.takeWhile { it == ' ' || it == '\t' }
+            
+            if (indent.isNotEmpty()) {
+                return newValue.substring(0, selection) + indent + newValue.substring(selection)
+            }
+        }
+        return null
+    }
+
+    class HtmlSyntaxTransformation : androidx.compose.ui.text.input.VisualTransformation {
+        override fun filter(text: AnnotatedString): androidx.compose.ui.text.input.TransformedText {
+            return androidx.compose.ui.text.input.TransformedText(
+                highlightHtml(text.text),
+                androidx.compose.ui.text.input.OffsetMapping.Identity
+            )
+        }
+
+        private fun highlightHtml(text: String): AnnotatedString {
+            val tagColor = androidx.compose.ui.graphics.Color(0xFF569CD6) // Blue
+            val attrColor = androidx.compose.ui.graphics.Color(0xFF9CDCFE) // Cyan
+            val valueColor = androidx.compose.ui.graphics.Color(0xFFCE9178) // Orange
+            val commentColor = androidx.compose.ui.graphics.Color(0xFF6A9955) // Green
+            val bracketColor = androidx.compose.ui.graphics.Color(0xFF808080) // Gray
+            val entityColor = androidx.compose.ui.graphics.Color(0xFFD7BA7D) // Gold
+
+            return buildAnnotatedString {
+                append(text)
+                
+                // Comments
+                Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL).findAll(text).forEach {
+                    addStyle(SpanStyle(color = commentColor), it.range.first, it.range.last + 1)
+                }
+                
+                // XML/Doctype
+                Regex("<\\?.*?\\?>|<!.*?>").findAll(text).forEach {
+                    addStyle(SpanStyle(color = tagColor), it.range.first, it.range.last + 1)
+                }
+
+                // Tags
+                Regex("<[^>]*>").findAll(text).forEach { result ->
+                    val tagRange = result.range
+                    val tagContent = result.value
+                    
+                    if (!tagContent.startsWith("<!--")) {
+                        // All brackets
+                        addStyle(SpanStyle(color = bracketColor), tagRange.first, tagRange.first + 1)
+                        addStyle(SpanStyle(color = bracketColor), tagRange.last, tagRange.last + 1)
+                        
+                        // Tag Name
+                        val nameMatch = Regex("<(/?([a-zA-Z0-9:-]+))").find(tagContent)
+                        if (nameMatch != null) {
+                            val nameRange = nameMatch.groups[1]!!.range
+                            addStyle(SpanStyle(color = tagColor), tagRange.first + nameRange.first, tagRange.first + nameRange.last + 1)
+                        }
+                        
+                        // Attributes
+                        Regex("([a-zA-Z0-9:-]+)=").findAll(tagContent).forEach { attr ->
+                            val attrRange = attr.groups[1]!!.range
+                            addStyle(SpanStyle(color = attrColor), tagRange.first + attrRange.first, tagRange.first + attrRange.last + 1)
+                        }
+                        
+                        // Values
+                        Regex("(\"[^\"]*\"|'[^']*')").findAll(tagContent).forEach { valMatch ->
+                            val valRange = valMatch.range
+                            addStyle(SpanStyle(color = valueColor), tagRange.first + valRange.first, tagRange.first + valRange.last + 1)
+                        }
+                    }
+                }
+                
+                // Entities
+                Regex("&[a-zA-Z0-9#]+;").findAll(text).forEach {
+                    addStyle(SpanStyle(color = entityColor), it.range.first, it.range.last + 1)
+                }
+            }
+        }
+    }
 }
