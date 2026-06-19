@@ -109,10 +109,13 @@ object RichTextUtil {
         val spanStyles = ann.spanStyles
         val text = ann.text
         
-        data class Tag(val offset: Int, val isOpen: Boolean, val tag: String)
+        data class Tag(val offset: Int, val isOpen: Boolean, val tag: String, val priority: Int)
         val tags = mutableListOf<Tag>()
         
-        for (span in spanStyles) {
+        // Helper to deduplicate identical spans on the same range
+        val uniqueSpans = spanStyles.distinctBy { "${it.start}-${it.end}-${it.item}" }
+        
+        for (span in uniqueSpans) {
             val style = span.item
             val sbTagsOpen = mutableListOf<String>()
             val sbTagsClose = mutableListOf<String>()
@@ -201,8 +204,8 @@ object RichTextUtil {
             val closeStr = sbTagsClose.joinToString("")
             
             if (openStr.isNotEmpty()) {
-                tags.add(Tag(span.start, true, openStr))
-                tags.add(Tag(span.end, false, closeStr))
+                tags.add(Tag(span.start, true, openStr, 1))
+                tags.add(Tag(span.end, false, closeStr, 0))
             }
         }
         
@@ -234,12 +237,12 @@ object RichTextUtil {
             val closeStr = sbTagsClose.joinToString("")
             
             if (openStr.isNotEmpty()) {
-                tags.add(Tag(range.start, true, openStr))
-                tags.add(Tag(range.end, false, closeStr))
+                tags.add(Tag(range.start, true, openStr, 2))
+                tags.add(Tag(range.end, false, closeStr, -1))
             }
         }
         
-        tags.sortWith(compareBy({ it.offset }, { if (it.isOpen) 1 else 0 }))
+        tags.sortWith(compareBy({ it.offset }, { it.priority }))
         
         val sb = StringBuilder()
         var currentOffset = 0
@@ -457,6 +460,13 @@ object RichTextUtil {
 
     class HtmlSyntaxTransformation : androidx.compose.ui.text.input.VisualTransformation {
         override fun filter(text: AnnotatedString): androidx.compose.ui.text.input.TransformedText {
+            // Optimization for very large files to prevent UI lag/crashes
+            if (text.length > 30000) {
+                return androidx.compose.ui.text.input.TransformedText(
+                    text,
+                    androidx.compose.ui.text.input.OffsetMapping.Identity
+                )
+            }
             return androidx.compose.ui.text.input.TransformedText(
                 highlightHtml(text.text),
                 androidx.compose.ui.text.input.OffsetMapping.Identity

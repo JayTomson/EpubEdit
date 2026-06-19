@@ -507,7 +507,7 @@ fun EditorScreen(
 
     // Load initial blocks
     LaunchedEffect(chapterId, currentChapter) {
-        if (initializedChapterId != chapterId) {
+        if (currentChapter.id == chapterId && initializedChapterId != chapterId) {
             initializedChapterId = chapterId
             val raw = currentChapter.contentHtml
             val displayHtmlFromDb = currentChapter.displayHtml

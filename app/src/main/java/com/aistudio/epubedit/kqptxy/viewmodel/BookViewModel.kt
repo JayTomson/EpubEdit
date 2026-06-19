@@ -529,7 +529,8 @@ class BookViewModel(private val app: Application, private val repository: BookRe
                         previewImagePath = it.previewImagePath,
                         originalFilePath = it.originalFilePath,
                         anchorStart = it.anchorStart,
-                        anchorEnd = it.anchorEnd
+                        anchorEnd = it.anchorEnd,
+                        displayHtml = it.displayHtml
                     )
                 }
 

@@ -570,8 +570,11 @@ object EpubProcessor {
 
                         val relPath = try { chapterFile.relativeTo(tempDir).path.replace('\\', '/') } catch(e: Exception) { null }
                         val isFirstFromFile = chaptersList.none { it.originalFilePath == relPath }
+                        
+                        // Check if this file is split into multiple navPoints
+                        val isSplitFile = ncxNavPoints.count { it.fileHref == item.fileHref } > 1
 
-                        val storedHtml = if (keepOriginal && isFirstFromFile) {
+                        val storedHtml = if (keepOriginal && isFirstFromFile && !isSplitFile) {
                             fullHtml
                         } else {
                             cleanedHtmlSegment
@@ -1483,23 +1486,14 @@ object EpubProcessor {
                         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
                     ).find(firstContent)?.value ?: "<head></head>"
 
-                    val bodyParts = sortedChs.mapIndexed { i, ch ->
-                        if (i == 0) {
-                            // Из первой берём содержимое <body>
-                            Regex(
-                                "<body(?:\\s+[^>]*)?>(.+?)</body>",
-                                setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
-                            ).find(ch.contentHtml)?.groupValues?.get(1)?.trim()
-                                ?: ch.contentHtml
-                        } else {
-                            // Остальные — уже фрагменты (или тоже полные, берём body)
-                            val bodyContent = Regex(
-                                "<body(?:\\s+[^>]*)?>(.+?)</body>",
-                                setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
-                            ).find(ch.contentHtml)?.groupValues?.get(1)?.trim()
-                            bodyContent ?: ch.contentHtml
-                        }
-                    }.joinToString("\n")
+                val bodyParts = sortedChs.map { ch ->
+                    // Prefer displayHtml (pure fragment) over contentHtml (which might be the full file if it was a single-chapter file)
+                    val sourceHtml = ch.displayHtml ?: ch.contentHtml
+                    Regex(
+                        "<body(?:\\s+[^>]*)?>(.+?)</body>",
+                        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+                    ).find(sourceHtml)?.groupValues?.get(1)?.trim() ?: sourceHtml
+                }.joinToString("\n")
 
                     // Берём xml-декларацию и doctype из оригинала
                     val xmlDecl = if (firstContent.startsWith("<?xml")) {
