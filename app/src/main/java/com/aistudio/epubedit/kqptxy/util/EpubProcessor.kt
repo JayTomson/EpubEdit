@@ -1425,6 +1425,12 @@ object EpubProcessor {
         val sanitizedFileName = if (fileName.endsWith(".epub", ignoreCase = true)) fileName else "$fileName.epub"
         val tempOutputFile = File(context.cacheDir, "temp_export_orig_${System.currentTimeMillis()}_$sanitizedFileName")
 
+        val hasNewChapters = chapters.any { it.originalFilePath == null }
+        if (hasNewChapters) {
+            Log.d(TAG, "exportFromOriginalArchive: New chapters detected, falling back to scratch generation to ensure they are included in manifest.")
+            return null
+        }
+
         // Group chapters by original file path to handle split files
         val chapterOverrides = chapters
             .filter { it.originalFilePath != null }

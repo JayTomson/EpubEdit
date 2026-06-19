@@ -500,12 +500,22 @@ fun EditorScreen(
                 endMatch = htmlEndRegex.findAll(raw).lastOrNull()
             }
             
+            val headRegexFull = Regex("<head(?:\\s+[^>]*)?>.*?</head>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            val titleRegexFull = Regex("<title(?:\\s+[^>]*)?>.*?</title>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            val metaRegexFull = Regex("<meta(?:\\s+[^>]*)?/?>", RegexOption.IGNORE_CASE)
+            val linkRegexFull = Regex("<link(?:\\s+[^>]*)?/?>", RegexOption.IGNORE_CASE)
+
             if (startMatch != null) {
                 val startContentIdx = startMatch.range.last + 1
                 val endContentIdx = endMatch?.range?.first ?: raw.length
                 
                 if (startContentIdx <= endContentIdx) {
-                    htmlPrefix = raw.substring(0, startContentIdx) + "\n"
+                    htmlPrefix = raw.substring(0, startContentIdx)
+                        .replace(headRegexFull, "")
+                        .replace(titleRegexFull, "")
+                        .replace(metaRegexFull, "")
+                        .replace(linkRegexFull, "")
+                        .plus("\n")
                     bodyContent = raw.substring(startContentIdx, endContentIdx)
                     htmlSuffix = if (endMatch != null) "\n" + raw.substring(endContentIdx) else ""
                 } else {
@@ -516,14 +526,10 @@ fun EditorScreen(
                 htmlPrefix = ""
                 htmlSuffix = ""
                 // Still try to strip <head>, <title>, <meta>, <link> if we fallback to full content, so we don't display them in visual mode
-                val headRegex = Regex("<head(?:\\s+[^>]*)?>.*?</head>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-                val titleRegex = Regex("<title(?:\\s+[^>]*)?>.*?</title>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-                val metaRegex = Regex("<meta(?:\\s+[^>]*)?/?>", RegexOption.IGNORE_CASE)
-                val linkRegex = Regex("<link(?:\\s+[^>]*)?/?>", RegexOption.IGNORE_CASE)
-                bodyContent = raw.replace(headRegex, "")
-                    .replace(titleRegex, "")
-                    .replace(metaRegex, "")
-                    .replace(linkRegex, "")
+                bodyContent = raw.replace(headRegexFull, "")
+                    .replace(titleRegexFull, "")
+                    .replace(metaRegexFull, "")
+                    .replace(linkRegexFull, "")
             }
 
             val parsed = withContext(Dispatchers.IO) {
@@ -569,7 +575,17 @@ fun EditorScreen(
                 val endContentIdx = endMatch?.range?.first ?: htmlText.length
                 
                 if (startContentIdx <= endContentIdx) {
-                    htmlPrefix = htmlText.substring(0, startContentIdx) + "\n"
+                    val headRegex = Regex("<head(?:\\s+[^>]*)?>.*?</head>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                    val titleRegex = Regex("<title(?:\\s+[^>]*)?>.*?</title>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                    val metaRegex = Regex("<meta(?:\\s+[^>]*)?/?>", RegexOption.IGNORE_CASE)
+                    val linkRegex = Regex("<link(?:\\s+[^>]*)?/?>", RegexOption.IGNORE_CASE)
+                    
+                    htmlPrefix = htmlText.substring(0, startContentIdx)
+                        .replace(headRegex, "")
+                        .replace(titleRegex, "")
+                        .replace(metaRegex, "")
+                        .replace(linkRegex, "")
+                        .plus("\n")
                     bodyContent = htmlText.substring(startContentIdx, endContentIdx)
                     htmlSuffix = if (endMatch != null) "\n" + htmlText.substring(endContentIdx) else ""
                     
