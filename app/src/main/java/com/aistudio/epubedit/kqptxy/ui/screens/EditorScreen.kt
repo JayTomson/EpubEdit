@@ -19,6 +19,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -36,6 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.em
 import androidx.core.text.HtmlCompat
 import coil.compose.AsyncImage
 import com.aistudio.epubedit.kqptxy.util.WordStatsHelper
@@ -605,7 +608,49 @@ fun EditorScreen(
             }
             htmlTextState = TextFieldValue(newText, androidx.compose.ui.text.TextRange(newCursorIdx))
         } else {
-            Toast.makeText(context, Loc.t("formatting_only_html", lang), Toast.LENGTH_LONG).show()
+            val idx = activeBlockIndex ?: -1
+            if (idx >= 0 && idx < editorBlocks.size) {
+                val block = editorBlocks[idx]
+                if (block is EditorBlock.Text) {
+                    val currentTf = blockTextFieldValues[block.id] ?: TextFieldValue(annotatedString = com.aistudio.epubedit.kqptxy.util.RichTextUtil.htmlToAnnotatedString(block.content))
+                    val selection = currentTf.selection
+                    if (!selection.collapsed) {
+                        val start = selection.min
+                        val end = selection.max
+                        
+                        val newAnn = androidx.compose.ui.text.buildAnnotatedString {
+                            append(currentTf.annotatedString)
+                            
+                            when (tagOpen.lowercase()) {
+                                "<b>", "<strong>" -> addStyle(androidx.compose.ui.text.SpanStyle(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold), start, end)
+                                "<i>", "<em>" -> addStyle(androidx.compose.ui.text.SpanStyle(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic), start, end)
+                                "<u>" -> addStyle(androidx.compose.ui.text.SpanStyle(textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline), start, end)
+                                "<s>", "<strike>", "<del>" -> addStyle(androidx.compose.ui.text.SpanStyle(textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough), start, end)
+                                "<sup>" -> addStyle(androidx.compose.ui.text.SpanStyle(baselineShift = androidx.compose.ui.text.style.BaselineShift.Superscript), start, end)
+                                "<sub>" -> addStyle(androidx.compose.ui.text.SpanStyle(baselineShift = androidx.compose.ui.text.style.BaselineShift.Subscript), start, end)
+                                "<h1>" -> addStyle(androidx.compose.ui.text.SpanStyle(fontSize = 1.5f.em), start, end)
+                                "<h2>" -> addStyle(androidx.compose.ui.text.SpanStyle(fontSize = 1.4f.em), start, end)
+                                "<h3>" -> addStyle(androidx.compose.ui.text.SpanStyle(fontSize = 1.3f.em), start, end)
+                                "<h4>" -> addStyle(androidx.compose.ui.text.SpanStyle(fontSize = 1.2f.em), start, end)
+                                "<h5>" -> addStyle(androidx.compose.ui.text.SpanStyle(fontSize = 1.1f.em), start, end)
+                                "<li>" -> addStringAnnotation(tag = "LIST_ITEM", annotation = "bullet", start = start, end = end)
+                                "<blockquote>" -> {
+                                    addStringAnnotation(tag = "QUOTE", annotation = "quote", start = start, end = end)
+                                    addStyle(androidx.compose.ui.text.SpanStyle(background = androidx.compose.ui.graphics.Color.LightGray.copy(alpha = 0.2f), fontStyle = androidx.compose.ui.text.font.FontStyle.Italic), start, end)
+                                }
+                            }
+                        }
+                        
+                        val updatedTf = currentTf.copy(annotatedString = newAnn)
+                        blockTextFieldValues[block.id] = updatedTf
+                        editorBlocks[idx] = EditorBlock.Text(com.aistudio.epubedit.kqptxy.util.RichTextUtil.annotatedStringToHtml(newAnn), block.id)
+                    } else {
+                        Toast.makeText(context, Loc.t("select_text_first", lang), Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } else {
+                Toast.makeText(context, Loc.t("focus_text_block_first", lang), Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -825,7 +870,8 @@ fun EditorScreen(
                     ) {
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             IconButton(
                                 onClick = { applyFormatAction("<b>", "</b>") }
@@ -846,6 +892,21 @@ fun EditorScreen(
                                 onClick = { applyFormatAction("<s>", "</s>") }
                             ) {
                                 Icon(Icons.Default.FormatStrikethrough, Loc.t("strikethrough", lang))
+                            }
+                            IconButton(
+                                onClick = { applyFormatAction("<h1>", "</h1>") }
+                            ) {
+                                Icon(Icons.Default.Title, "H1")
+                            }
+                            IconButton(
+                                onClick = { applyFormatAction("<li>", "</li>") }
+                            ) {
+                                Icon(Icons.Default.FormatListBulleted, "List")
+                            }
+                            IconButton(
+                                onClick = { applyFormatAction("<blockquote>", "</blockquote>") }
+                            ) {
+                                Icon(Icons.Default.FormatQuote, "Quote")
                             }
                             IconButton(
                                 onClick = { applyFormatAction("<p>", "</p>") }

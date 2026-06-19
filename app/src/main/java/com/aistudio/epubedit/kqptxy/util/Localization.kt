@@ -107,7 +107,9 @@ object Loc {
         "image_not_found_local" to "Изображение не найдено локально",
         "file_label" to "Файл: ",
         "image_load_error" to "Ошибка загрузки изображения",
-        "delete_illustration_cd" to "Удалить иллюстрацию"
+        "delete_illustration_cd" to "Удалить иллюстрацию",
+        "select_text_first" to "Выделите текст для применения стиля",
+        "focus_text_block_first" to "Сначала выберите текстовый блок"
     )
 
     private val en = mapOf(
@@ -216,7 +218,9 @@ object Loc {
         "image_not_found_local" to "Image not found locally",
         "file_label" to "File: ",
         "image_load_error" to "Image loading error",
-        "delete_illustration_cd" to "Delete illustration"
+        "delete_illustration_cd" to "Delete illustration",
+        "select_text_first" to "Select text first to apply formatting",
+        "focus_text_block_first" to "Select a text block first"
     )
 
     fun t(key: String, lang: String): String {
