@@ -73,5 +73,8 @@ data class Chapter(
     val wordCount: Int = 0,
     val characterCount: Int = 0,
     val previewImagePath: String? = null,
-    val originalFilePath: String? = null
+    val originalFilePath: String? = null,
+    val anchorStart: String? = null,
+    val anchorEnd: String? = null,
+    val displayHtml: String? = null
 )

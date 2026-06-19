@@ -8,7 +8,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [Title::class, SourceFile::class, Chapter::class],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -26,6 +26,14 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_4_5 = object : androidx.room.migration.Migration(4, 5) {
+            override fun migrate(database: androidx.sqlite.db.SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE chapters ADD COLUMN anchorStart TEXT")
+                database.execSQL("ALTER TABLE chapters ADD COLUMN anchorEnd TEXT")
+                database.execSQL("ALTER TABLE chapters ADD COLUMN displayHtml TEXT")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -39,7 +47,7 @@ abstract class AppDatabase : RoomDatabase() {
                             db.execSQL("PRAGMA foreign_keys = ON;")
                         }
                     })
-                    .addMigrations(MIGRATION_3_4)
+                    .addMigrations(MIGRATION_3_4, MIGRATION_4_5)
                     .fallbackToDestructiveMigrationOnDowngrade()
                     .build()
                 INSTANCE = instance

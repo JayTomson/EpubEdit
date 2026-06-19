@@ -25,7 +25,10 @@ data class ParsedChapter(
     val wordCount: Int,
     val characterCount: Int,
     val previewImagePath: String? = null,
-    val originalFilePath: String? = null
+    val originalFilePath: String? = null,
+    val anchorStart: String? = null,
+    val anchorEnd: String? = null,
+    val displayHtml: String? = null
 )
 
 object EpubProcessor {
@@ -565,6 +568,15 @@ object EpubProcessor {
                         val htmlSegment = fullHtml.substring(finalStartIdx, finalEndIdx)
                         val cleanedHtmlSegment = cleanChapterHtml(htmlSegment, keepOriginal)
 
+                        val relPath = try { chapterFile.relativeTo(tempDir).path.replace('\\', '/') } catch(e: Exception) { null }
+                        val isFirstFromFile = chaptersList.none { it.originalFilePath == relPath }
+
+                        val storedHtml = if (keepOriginal && isFirstFromFile) {
+                            fullHtml
+                        } else {
+                            cleanedHtmlSegment
+                        }
+
                         val words = WordStatsHelper.countWords(cleanedHtmlSegment)
                         val chars = WordStatsHelper.countCharacters(cleanedHtmlSegment)
 
@@ -602,11 +614,14 @@ object EpubProcessor {
 
                         chaptersList.add(ParsedChapter(
                             title = bestTitle,
-                            contentHtml = cleanedHtmlSegment,
+                            contentHtml = storedHtml,
                             wordCount = words,
                             characterCount = chars,
                             previewImagePath = chapPreviewImagePath,
-                            originalFilePath = try { chapterFile.relativeTo(tempDir).path.replace('\\', '/') } catch(e: Exception) { null }
+                            originalFilePath = relPath,
+                            anchorStart = item.anchor,
+                            anchorEnd = if (endIdx != -1) findAnchorIdAtPosition(fullHtml, endIdx) else null,
+                            displayHtml = cleanedHtmlSegment
                         ))
                     }
                 } catch (e: Exception) {
@@ -745,6 +760,17 @@ object EpubProcessor {
         }
         
         return -1
+    }
+
+    private fun findAnchorIdAtPosition(html: String, position: Int): String? {
+        // Ищем ближайший тег с id= перед указанной позицией
+        val idRegex = Regex("""id\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+        var lastId: String? = null
+        for (match in idRegex.findAll(html)) {
+            if (match.range.first >= position) break
+            lastId = match.groupValues[1]
+        }
+        return lastId
     }
 
     data class ManifestItem(val id: String, val href: String, val mediaType: String?, val properties: String? = null)
@@ -1049,9 +1075,15 @@ object EpubProcessor {
         val prefs = context.getSharedPreferences("app_settings", Context.MODE_PRIVATE)
         val keepOriginalSetting = !prefs.getBoolean("pref_convert_epub_system", true)
         if (keepOriginalSetting && titleId != null) {
+            val originalEpubDir = File(context.filesDir, "epub_originals/book_$titleId")
+            if (!originalEpubDir.exists()) {
+                Log.w(TAG, "exportToEpub: Original archive missing for book_$titleId, cannot preserve original")
+                throw IllegalStateException("ORIGINAL_ARCHIVE_MISSING")
+            }
             val result = exportFromOriginalArchive(context, fileName, titleId, chapters)
             if (result != null) return result
-            Log.d(TAG, "exportToEpub: Falling back to scratch generation because original archive was missing or failed.")
+            Log.e(TAG, "exportFromOriginalArchive failed despite dir existing")
+            throw IllegalStateException("EXPORT_FROM_ORIGINAL_FAILED")
         }
 
         val bookLanguage = prefs.getString("pref_language", "ru") ?: "ru"
@@ -1431,9 +1463,69 @@ object EpubProcessor {
         // Group existing chapters by original file path to handle split files
         val chapterOverrides = existingChapters
             .groupBy { it.originalFilePath!! }
-            .mapValues { (_, chs) ->
-                // If keepOriginal was on, contentHtml should already be full HTML or segment with tags
-                chs.joinToString("\n") { it.contentHtml }
+            .mapValues { (filePath, chs) ->
+                // chapters is already sorted by the caller, so the order here is preserved
+                val sortedChs = chs
+
+                // Если у первой главы contentHtml — полный xhtml (содержит <html>) — используем его как основу
+                val firstContent = sortedChs.first().contentHtml.trim()
+                val isFullXhtml = firstContent.contains("<html", ignoreCase = true) ||
+                                  firstContent.contains("<?xml", ignoreCase = true)
+
+                if (isFullXhtml && sortedChs.size == 1) {
+                    // Одна глава, полный файл — просто вернуть как есть
+                    firstContent
+                } else if (isFullXhtml && sortedChs.size > 1) {
+                    // Несколько глав из одного файла — нужно пересобрать xhtml:
+                    // берём <head> из первой главы, body собираем из всех фрагментов
+                    val headMatch = Regex(
+                        "<head(?:\\s+[^>]*)?>.*?</head>",
+                        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+                    ).find(firstContent)?.value ?: "<head></head>"
+
+                    val bodyParts = sortedChs.mapIndexed { i, ch ->
+                        if (i == 0) {
+                            // Из первой берём содержимое <body>
+                            Regex(
+                                "<body(?:\\s+[^>]*)?>(.+?)</body>",
+                                setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+                            ).find(ch.contentHtml)?.groupValues?.get(1)?.trim()
+                                ?: ch.contentHtml
+                        } else {
+                            // Остальные — уже фрагменты (или тоже полные, берём body)
+                            val bodyContent = Regex(
+                                "<body(?:\\s+[^>]*)?>(.+?)</body>",
+                                setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+                            ).find(ch.contentHtml)?.groupValues?.get(1)?.trim()
+                            bodyContent ?: ch.contentHtml
+                        }
+                    }.joinToString("\n")
+
+                    // Берём xml-декларацию и doctype из оригинала
+                    val xmlDecl = if (firstContent.startsWith("<?xml")) {
+                        firstContent.substringBefore("<html").trim() + "\n"
+                    } else ""
+
+                    val htmlOpenTag = Regex("<html[^>]*>", RegexOption.IGNORE_CASE)
+                        .find(firstContent)?.value ?: "<html xmlns=\"http://www.w3.org/1999/xhtml\">"
+
+                    """$xmlDecl$htmlOpenTag
+$headMatch
+<body>
+$bodyParts
+</body>
+</html>"""
+                } else {
+                    // Нет полного xhtml — fallback: оборачиваем фрагменты в минимальный шаблон
+                    val bodyParts = sortedChs.joinToString("\n") { it.contentHtml }
+                    """<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>${sortedChs.first().title}</title></head>
+<body>
+$bodyParts
+</body>
+</html>"""
+                }
             }
 
         // Find OPF relative path

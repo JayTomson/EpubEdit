@@ -80,6 +80,7 @@ fun DetailsScreen(
     val chapters by viewModel.chapters.collectAsState()
     val reorderingEnabled by viewModel.reorderingEnabled.collectAsState()
     val currentLang by viewModel.currentLanguage.collectAsState()
+    val exportError by viewModel.exportError.collectAsState()
 
     var activeTab by remember { mutableStateOf(0) } // 0: Files, 1: Chapters, 2: Info, 3: Stats
     val tabNames = listOf(Loc.t("tab_files", currentLang), Loc.t("tab_chapters", currentLang), Loc.t("tab_info", currentLang), Loc.t("tab_stats", currentLang))
@@ -195,6 +196,34 @@ fun DetailsScreen(
                 }
             }
         }
+    }
+
+    if (exportError != null) {
+        AlertDialog(
+            onDismissRequest = { viewModel.clearExportError() },
+            title = {
+                Text(
+                    text = if (exportError == BookViewModel.ExportError.ORIGINAL_MISSING)
+                        "Оригинальный EPUB не найден"
+                    else "Ошибка экспорта",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = if (exportError == BookViewModel.ExportError.ORIGINAL_MISSING)
+                        "Не удалось найти оригинальные файлы EPUB для сборки. Возможно, они были удалены из памяти приложения.\n\nПопробуйте отключить 'Без упрощения EPUB' в настройках библиотеки для экспорта."
+                    else "Не удалось собрать EPUB файл с сохранением оригинальной структуры.\n\nПопробуйте отключить 'Без упрощения EPUB' в настройках библиотеки для экспорта."
+                )
+            },
+            confirmButton = {
+                Button(onClick = { viewModel.clearExportError() }) {
+                    Text("Понятно")
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+            shape = RoundedCornerShape(24.dp)
+        )
     }
 }
 

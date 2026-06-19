@@ -39,6 +39,18 @@ class BookViewModel(private val app: Application, private val repository: BookRe
     private val _convertEpubSystemEnabled = MutableStateFlow(prefs.getBoolean("pref_convert_epub_system", true))
     val convertEpubSystemEnabled: StateFlow<Boolean> = _convertEpubSystemEnabled.asStateFlow()
 
+    private val _exportError = MutableStateFlow<ExportError?>(null)
+    val exportError: StateFlow<ExportError?> = _exportError.asStateFlow()
+
+    fun clearExportError() {
+        _exportError.value = null
+    }
+
+    enum class ExportError {
+        ORIGINAL_MISSING,
+        EXPORT_FAILED
+    }
+
     fun updateTheme(themeName: String) {
         prefs.edit().putString("pref_theme", themeName).apply()
         _currentTheme.value = themeName
@@ -270,7 +282,10 @@ class BookViewModel(private val app: Application, private val repository: BookRe
                              wordCount = pc.wordCount,
                              characterCount = pc.characterCount,
                              previewImagePath = pc.previewImagePath,
-                             originalFilePath = pc.originalFilePath
+                             originalFilePath = pc.originalFilePath,
+                             anchorStart = pc.anchorStart,
+                             anchorEnd = pc.anchorEnd,
+                             displayHtml = pc.displayHtml
                          )
                      )
                  }
@@ -337,7 +352,10 @@ class BookViewModel(private val app: Application, private val repository: BookRe
                                     wordCount = pc.wordCount,
                                     characterCount = pc.characterCount,
                                     previewImagePath = pc.previewImagePath,
-                                    originalFilePath = pc.originalFilePath
+                                    originalFilePath = pc.originalFilePath,
+                                    anchorStart = pc.anchorStart,
+                                    anchorEnd = pc.anchorEnd,
+                                    displayHtml = pc.displayHtml
                                 )
                             )
                         }
@@ -400,18 +418,19 @@ class BookViewModel(private val app: Application, private val repository: BookRe
         }
     }
 
-    fun updateChapterContent(chapterId: Long, title: String, contentHtml: String, previewImagePath: String?) {
+    fun updateChapterContent(chapterId: Long, title: String, contentHtml: String, previewImagePath: String?, displayHtml: String? = null) {
         viewModelScope.launch(Dispatchers.IO) {
             val current = repository.getChapterByIdOneShot(chapterId) ?: return@launch
-            val words = WordStatsHelper.countWords(contentHtml)
-            val chars = WordStatsHelper.countCharacters(contentHtml)
+            val words = WordStatsHelper.countWords(displayHtml ?: contentHtml)
+            val chars = WordStatsHelper.countCharacters(displayHtml ?: contentHtml)
             
             val updated = current.copy(
                 title = title.ifBlank { "Untitled" },
                 contentHtml = contentHtml,
                 previewImagePath = previewImagePath,
                 wordCount = words,
-                characterCount = chars
+                characterCount = chars,
+                displayHtml = displayHtml ?: current.displayHtml
             )
             repository.updateChapter(updated)
         }
@@ -508,23 +527,36 @@ class BookViewModel(private val app: Application, private val repository: BookRe
                         wordCount = it.wordCount,
                         characterCount = it.characterCount,
                         previewImagePath = it.previewImagePath,
-                        originalFilePath = it.originalFilePath
+                        originalFilePath = it.originalFilePath,
+                        anchorStart = it.anchorStart,
+                        anchorEnd = it.anchorEnd
                     )
                 }
 
-                val result = EpubProcessor.exportToEpub(
-                    context = context,
-                    fileName = title.outputFileName ?: "${title.name}.epub",
-                    title = title.name,
-                    author = title.author ?: "Автор",
-                    description = title.description ?: "",
-                    coverImagePath = title.coverImage,
-                    chapters = plist,
-                    titleId = titleId,
-                    generateToc = generateToc
-                )
-                withContext(Dispatchers.Main) {
-                    onFinished(result)
+                try {
+                    val result = EpubProcessor.exportToEpub(
+                        context = context,
+                        fileName = title.outputFileName ?: "${title.name}.epub",
+                        title = title.name,
+                        author = title.author ?: "Автор",
+                        description = title.description ?: "",
+                        coverImagePath = title.coverImage,
+                        chapters = plist,
+                        titleId = titleId,
+                        generateToc = generateToc
+                    )
+                    withContext(Dispatchers.Main) {
+                        onFinished(result)
+                    }
+                } catch (e: IllegalStateException) {
+                    withContext(Dispatchers.Main) {
+                        when (e.message) {
+                            "ORIGINAL_ARCHIVE_MISSING" -> _exportError.value = ExportError.ORIGINAL_MISSING
+                            "EXPORT_FROM_ORIGINAL_FAILED" -> _exportError.value = ExportError.EXPORT_FAILED
+                            else -> Log.e("BookViewModel", "Export failed with error: ${e.message}")
+                        }
+                        onFinished(null)
+                    }
                 }
             } catch (e: Exception) {
                 Log.e("BookViewModel", "Merge export failed", e)

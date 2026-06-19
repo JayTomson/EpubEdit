@@ -224,6 +224,15 @@ fun isCursorOnEmptyLine(tf: TextFieldValue): Boolean {
     return lineText.trim().isEmpty()
 }
 
+fun extractBodyForDisplay(html: String): String {
+    if (!html.contains("<body", ignoreCase = true)) return html
+    val bodyRegex = Regex(
+        "<body(?:\\s+[^>]*)?>(.+?)</body>",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+    )
+    return bodyRegex.find(html)?.groupValues?.get(1)?.trim() ?: html
+}
+
 fun handleHtmlAutoClose(oldState: TextFieldValue, newState: TextFieldValue): TextFieldValue {
     val oldText = oldState.text
     val newText = newState.text
@@ -487,49 +496,20 @@ fun EditorScreen(
         if (initializedChapterId != chapterId) {
             initializedChapterId = chapterId
             val raw = currentChapter.contentHtml
-            var bodyContent = raw
+            val displayHtmlFromDb = currentChapter.displayHtml
             
-            val bodyStartRegex = Regex("<\\s*(?:[a-zA-Z0-9]+:)?body[^>]*>", RegexOption.IGNORE_CASE)
-            val bodyEndRegex = Regex("</\\s*(?:[a-zA-Z0-9]+:)?body\\s*>", RegexOption.IGNORE_CASE)
+            var bodyContent = displayHtmlFromDb ?: extractBodyForDisplay(raw)
             
-            val startMatch = bodyStartRegex.find(raw)
-            var endMatch = bodyEndRegex.findAll(raw).lastOrNull()
-            if (endMatch == null) {
-                // Fallback to </html> if </body> is missing
-                val htmlEndRegex = Regex("</\\s*(?:[a-zA-Z0-9]+:)?html\\s*>", RegexOption.IGNORE_CASE)
-                endMatch = htmlEndRegex.findAll(raw).lastOrNull()
-            }
+            // Still need prefix/suffix for merging back if displayHtml was extracted from a full file
+            val bodyStartMatch = Regex("<body(?:\\s+[^>]*)?>", RegexOption.IGNORE_CASE).find(raw)
+            val bodyCloseIdx = raw.lowercase().lastIndexOf("</body>")
             
-            val headRegexFull = Regex("<head(?:\\s+[^>]*)?>.*?</head>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-            val titleRegexFull = Regex("<title(?:\\s+[^>]*)?>.*?</title>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-            val metaRegexFull = Regex("<meta(?:\\s+[^>]*)?/?>", RegexOption.IGNORE_CASE)
-            val linkRegexFull = Regex("<link(?:\\s+[^>]*)?/?>", RegexOption.IGNORE_CASE)
-
-            if (startMatch != null) {
-                val startContentIdx = startMatch.range.last + 1
-                val endContentIdx = endMatch?.range?.first ?: raw.length
-                
-                if (startContentIdx <= endContentIdx) {
-                    htmlPrefix = raw.substring(0, startContentIdx)
-                        .replace(headRegexFull, "")
-                        .replace(titleRegexFull, "")
-                        .replace(metaRegexFull, "")
-                        .replace(linkRegexFull, "")
-                        .plus("\n")
-                    bodyContent = raw.substring(startContentIdx, endContentIdx)
-                    htmlSuffix = if (endMatch != null) "\n" + raw.substring(endContentIdx) else ""
-                } else {
-                    htmlPrefix = ""
-                    htmlSuffix = ""
-                }
+            if (bodyStartMatch != null && bodyCloseIdx != -1) {
+                htmlPrefix = raw.substring(0, bodyStartMatch.range.last + 1)
+                htmlSuffix = raw.substring(bodyCloseIdx)
             } else {
                 htmlPrefix = ""
                 htmlSuffix = ""
-                // Still try to strip <head>, <title>, <meta>, <link> if we fallback to full content, so we don't display them in visual mode
-                bodyContent = raw.replace(headRegexFull, "")
-                    .replace(titleRegexFull, "")
-                    .replace(metaRegexFull, "")
-                    .replace(linkRegexFull, "")
             }
 
             val parsed = withContext(Dispatchers.IO) {
@@ -544,8 +524,7 @@ fun EditorScreen(
                     blockTextFieldValues[b.id] = TextFieldValue(annotatedString = ann)
                 }
             }
-            val initialHtmlText = if (htmlPrefix.isEmpty() && htmlSuffix.isEmpty()) bodyContent else htmlPrefix + bodyContent + htmlSuffix
-            val (beautified, _) = com.aistudio.epubedit.kqptxy.util.RichTextUtil.beautifyHtmlWithCursor(initialHtmlText, 0)
+            val (beautified, _) = com.aistudio.epubedit.kqptxy.util.RichTextUtil.beautifyHtmlWithCursor(bodyContent, 0)
             htmlTextState = TextFieldValue(if (raw == "<p>Введите...</p>" || raw.contains("Введите текст вашей новой главы")) "" else beautified)
             chapterTitle = currentChapter.title
         }
@@ -891,11 +870,27 @@ fun EditorScreen(
     }
 
     val performSave = {
+        val editedBody = if (isHtmlMode) {
+            val full = htmlTextState.text
+            // Extract body if we are in HTML mode and it has tags
+            val match = Regex("<body(?:\\s+[^>]*)?>(.+?)</body>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).find(full)
+            match?.groupValues?.get(1)?.trim() ?: full
+        } else {
+            serializeEditorBlocksToHtml(editorBlocks, blockTextFieldValues)
+        }
+
+        val finalFullHtml = if (htmlPrefix.isNotEmpty() && htmlSuffix.isNotEmpty()) {
+            "$htmlPrefix\n$editedBody\n$htmlSuffix"
+        } else {
+            editedBody
+        }
+
         viewModel.updateChapterContent(
             chapterId = chapterId,
             title = chapterTitle.trim(),
-            contentHtml = currentContentText(),
-            previewImagePath = currentChapter.previewImagePath
+            contentHtml = finalFullHtml,
+            previewImagePath = currentChapter.previewImagePath,
+            displayHtml = editedBody
         )
         Toast.makeText(context, Loc.t("chapter_saved", lang), Toast.LENGTH_SHORT).show()
     }
