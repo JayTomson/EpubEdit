@@ -316,7 +316,7 @@ fun EditorScreen(
         parsed.forEach { b ->
             if (b is EditorBlock.Text) {
                 val ann = com.aistudio.epubedit.kqptxy.util.RichTextUtil.htmlToAnnotatedString(b.content)
-                blockTextFieldValues[b.id] = TextFieldValue(annotatedString = ann, selection = androidx.compose.ui.text.TextRange(ann.length))
+                blockTextFieldValues[b.id] = TextFieldValue(annotatedString = ann)
             }
         }
     }
@@ -332,7 +332,7 @@ fun EditorScreen(
             parsed.forEach { b ->
                 if (b is EditorBlock.Text) {
                     val ann = com.aistudio.epubedit.kqptxy.util.RichTextUtil.htmlToAnnotatedString(b.content)
-                    blockTextFieldValues[b.id] = TextFieldValue(annotatedString = ann, selection = androidx.compose.ui.text.TextRange(ann.length))
+                    blockTextFieldValues[b.id] = TextFieldValue(annotatedString = ann)
                 }
             }
             isHtmlMode = false
@@ -452,9 +452,9 @@ fun EditorScreen(
                         blockTextFieldValues[afterBlock.id] = TextFieldValue("")
                     }
                 }
-                Toast.makeText(context, "Иллюстрация добавлена", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, Loc.t("illustration_added", lang), Toast.LENGTH_SHORT).show()
             } else {
-                Toast.makeText(context, "Ошибка сохранения иллюстрации", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, Loc.t("illustration_error", lang), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -466,7 +466,7 @@ fun EditorScreen(
             contentHtml = currentContentText(),
             previewImagePath = currentChapter.previewImagePath
         )
-        Toast.makeText(context, "Глава сохранена!", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, Loc.t("chapter_saved", lang), Toast.LENGTH_SHORT).show()
     }
 
     BackHandler {
@@ -481,8 +481,8 @@ fun EditorScreen(
     if (showUnsavedChangesDialog) {
         AlertDialog(
             onDismissRequest = { showUnsavedChangesDialog = false },
-            title = { Text("Несохраненные изменения") },
-            text = { Text("Вы действительно хотите выйти? Все несохраненные изменения в главе будут потеряны.") },
+            title = { Text(Loc.t("unsaved_changes", lang)) },
+            text = { Text(Loc.t("unsaved_changes_msg", lang)) },
             confirmButton = {
                 Button(
                     onClick = {
@@ -490,11 +490,11 @@ fun EditorScreen(
                         onBackClick()
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                ) { Text("Выйти") }
+                ) { Text(Loc.t("exit", lang)) }
             },
             dismissButton = {
                 TextButton(onClick = { showUnsavedChangesDialog = false }) {
-                    Text("Отмена", color = MaterialTheme.colorScheme.outline)
+                    Text(Loc.t("cancel", lang), color = MaterialTheme.colorScheme.outline)
                 }
             },
             containerColor = MaterialTheme.colorScheme.surfaceVariant
@@ -505,8 +505,8 @@ fun EditorScreen(
     if (imageToDeleteIndex != null) {
         AlertDialog(
             onDismissRequest = { imageToDeleteIndex = null },
-            title = { Text("Удалить иллюстрацию?") },
-            text = { Text("Вы действительно хотите удалить эту иллюстрацию из главы?") },
+            title = { Text(Loc.t("delete_illustration", lang)) },
+            text = { Text(Loc.t("delete_illustration_msg", lang)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -550,15 +550,15 @@ fun EditorScreen(
                             }
                         }
                         imageToDeleteIndex = null
-                        Toast.makeText(context, "Иллюстрация удалена", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, Loc.t("illustration_deleted", lang), Toast.LENGTH_SHORT).show()
                     }
                 ) {
-                    Text("Удалить", color = MaterialTheme.colorScheme.error)
+                    Text(Loc.t("delete", lang), color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { imageToDeleteIndex = null }) {
-                    Text("Отмена", color = MaterialTheme.colorScheme.outline)
+                    Text(Loc.t("cancel", lang), color = MaterialTheme.colorScheme.outline)
                 }
             },
             containerColor = MaterialTheme.colorScheme.surfaceVariant
@@ -569,7 +569,7 @@ fun EditorScreen(
         topBar = {
             if (!isFullscreen) {
                 TopAppBar(
-                    title = { Text("Редактор ePub", fontWeight = FontWeight.Bold) },
+                    title = { Text(Loc.t("epub_editor", lang), fontWeight = FontWeight.Bold) },
                     navigationIcon = {
                         IconButton(onClick = {
                             if (chapterTitle.trim() != currentChapter.title || currentContentText().trim() != currentChapter.contentHtml.trim()) {
@@ -578,7 +578,7 @@ fun EditorScreen(
                                 onBackClick()
                             }
                         }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад", tint = MaterialTheme.colorScheme.primary)
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, Loc.t("back", lang), tint = MaterialTheme.colorScheme.primary)
                         }
                     },
                     actions = {
@@ -589,7 +589,7 @@ fun EditorScreen(
                                 contentColor = MaterialTheme.colorScheme.onPrimary
                             ),
                             shape = RoundedCornerShape(12.dp)
-                        ) { Text("СОХРАНИТЬ", fontWeight = FontWeight.Bold) }
+                        ) { Text(Loc.t("save_upper", lang), fontWeight = FontWeight.Bold) }
                     }
                 )
             }
@@ -615,31 +615,31 @@ fun EditorScreen(
                                 onClick = { applyFormatAction("<b>", "</b>") },
                                 enabled = isHtmlMode
                             ) {
-                                Icon(Icons.Default.FormatBold, "Жирный")
+                                Icon(Icons.Default.FormatBold, Loc.t("bold", lang))
                             }
                             IconButton(
                                 onClick = { applyFormatAction("<i>", "</i>") },
                                 enabled = isHtmlMode
                             ) {
-                                Icon(Icons.Default.FormatItalic, "Курсив")
+                                Icon(Icons.Default.FormatItalic, Loc.t("italic", lang))
                             }
                             IconButton(
                                 onClick = { applyFormatAction("<u>", "</u>") },
                                 enabled = isHtmlMode
                             ) {
-                                Icon(Icons.Default.FormatUnderlined, "Подчеркнутый")
+                                Icon(Icons.Default.FormatUnderlined, Loc.t("underlined", lang))
                             }
                             IconButton(
                                 onClick = { applyFormatAction("<s>", "</s>") },
                                 enabled = isHtmlMode
                             ) {
-                                Icon(Icons.Default.FormatStrikethrough, "Зачеркнутый")
+                                Icon(Icons.Default.FormatStrikethrough, Loc.t("strikethrough", lang))
                             }
                             IconButton(
                                 onClick = { applyFormatAction("<p>", "</p>") },
                                 enabled = isHtmlMode
                             ) {
-                                Icon(Icons.Default.Segment, "Абзац")
+                                Icon(Icons.Default.Segment, Loc.t("paragraph", lang))
                             }
                             IconButton(onClick = {
                                 val tf = if (isHtmlMode) {
@@ -663,14 +663,14 @@ fun EditorScreen(
                                     imagePickerLauncher.launch("image/*")
                                 }
                             }) {
-                                Icon(Icons.Default.AddPhotoAlternate, "Вставить картинку")
+                                Icon(Icons.Default.AddPhotoAlternate, Loc.t("insert_image", lang))
                             }
                         }
                         
                         IconButton(onClick = { isFullscreen = !isFullscreen }) {
                             Icon(
                                 if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen, 
-                                contentDescription = if (isFullscreen) "Выйти из полного экрана" else "На весь экран",
+                                contentDescription = if (isFullscreen) Loc.t("exit_fullscreen", lang) else Loc.t("enter_fullscreen", lang),
                                 tint = MaterialTheme.colorScheme.primary
                             )
                         }
@@ -731,9 +731,9 @@ fun EditorScreen(
                                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                                 shape = RoundedCornerShape(50)
                             ) {
-                                Icon(Icons.Default.Save, "Сохранить", modifier = Modifier.size(16.dp))
+                                Icon(Icons.Default.Save, Loc.t("save", lang), modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("Сохранить", fontSize = 12.sp)
+                                Text(Loc.t("save", lang), fontSize = 12.sp)
                             }
                         }
                     }
@@ -749,7 +749,7 @@ fun EditorScreen(
         ) {
             if (!isFullscreen) {
                 Spacer(modifier = Modifier.height(12.dp))
-                Text("НАЗВАНИЕ ГЛАВЫ", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                Text(Loc.t("chapter_title", lang), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
                 OutlinedTextField(
                     value = chapterTitle,
                     onValueChange = { chapterTitle = it },
@@ -764,13 +764,13 @@ fun EditorScreen(
             
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    if (isHtmlMode) "HTML-КОД ГЛАВЫ" else "ТЕКСТ ГЛАВЫ", 
+                    if (isHtmlMode) Loc.t("chapter_html", lang) else Loc.t("chapter_text", lang), 
                     fontSize = 11.sp, 
                     fontWeight = FontWeight.Bold, 
                     color = if (isHtmlMode) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.secondary
                 )
                 val totalWords = WordStatsHelper.countWords(currentContentText())
-                Text("Слов: $totalWords", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline, fontWeight = FontWeight.Medium)
+                Text(Loc.t("words", lang) + ": $totalWords", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline, fontWeight = FontWeight.Medium)
             }
             Spacer(modifier = Modifier.height(6.dp))
             
@@ -816,7 +816,7 @@ fun EditorScreen(
                         modifier = Modifier.fillMaxSize(),
                         placeholder = {
                             Text(
-                                "<h2>Заголовок</h2>\n<p>Введите HTML код...</p>",
+                                Loc.t("enter_html_here", lang),
                                 color = Color.Gray
                             )
                         }
@@ -832,7 +832,7 @@ fun EditorScreen(
                                 is EditorBlock.Text -> {
                                     val tfValue = blockTextFieldValues.getOrPut(block.id) {
                                         val ann = com.aistudio.epubedit.kqptxy.util.RichTextUtil.htmlToAnnotatedString(block.content)
-                                        TextFieldValue(annotatedString = ann, selection = androidx.compose.ui.text.TextRange(ann.length))
+                                        TextFieldValue(annotatedString = ann)
                                     }
                                     OutlinedTextField(
                                         value = tfValue,
@@ -862,7 +862,7 @@ fun EditorScreen(
                                         ),
                                         placeholder = {
                                             Text(
-                                                "Введите текст здесь...",
+                                                Loc.t("enter_text_here", lang),
                                                 color = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
                                             )
                                         }

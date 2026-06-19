@@ -79,9 +79,10 @@ fun DetailsScreen(
     val sourceFiles by viewModel.sourceFiles.collectAsState()
     val chapters by viewModel.chapters.collectAsState()
     val reorderingEnabled by viewModel.reorderingEnabled.collectAsState()
+    val currentLang by viewModel.currentLanguage.collectAsState()
 
     var activeTab by remember { mutableStateOf(0) } // 0: Files, 1: Chapters, 2: Info, 3: Stats
-    val tabNames = listOf("Файлы", "Главы", "Инфо", "Статистика")
+    val tabNames = listOf(Loc.t("tab_files", currentLang), Loc.t("tab_chapters", currentLang), Loc.t("tab_info", currentLang), Loc.t("tab_stats", currentLang))
 
     if (title == null) {
         Box(
@@ -167,7 +168,8 @@ fun DetailsScreen(
                         viewModel = viewModel,
                         titleId = titleId,
                         sourceFiles = sourceFiles,
-                        reorderingEnabled = reorderingEnabled
+                        reorderingEnabled = reorderingEnabled,
+                        currentLang = currentLang
                     )
                     1 -> ChaptersTabContent(
                         viewModel = viewModel,
@@ -175,17 +177,20 @@ fun DetailsScreen(
                         chapters = chapters,
                         sourceFiles = sourceFiles,
                         reorderingEnabled = reorderingEnabled,
-                        onChapterEditClick = onChapterEditClick
+                        onChapterEditClick = onChapterEditClick,
+                        currentLang = currentLang
                     )
                     2 -> InfoTabContent(
                         context = context,
                         viewModel = viewModel,
-                        title = currentTitle
+                        title = currentTitle,
+                        currentLang = currentLang
                     )
                     3 -> StatsTabContent(
                         title = currentTitle,
                         sourceFiles = sourceFiles,
-                        chapters = chapters
+                        chapters = chapters,
+                        currentLang = currentLang
                     )
                 }
             }
@@ -200,7 +205,8 @@ fun FilesTabContent(
     viewModel: BookViewModel,
     titleId: Long,
     sourceFiles: List<SourceFile>,
-    reorderingEnabled: Boolean
+    reorderingEnabled: Boolean,
+    currentLang: String
 ) {
     var fileToRename by remember { mutableStateOf<SourceFile?>(null) }
     var showRenameDialog by remember { mutableStateOf(false) }
@@ -679,7 +685,8 @@ fun ChaptersTabContent(
     chapters: List<Chapter>,
     sourceFiles: List<SourceFile>,
     reorderingEnabled: Boolean,
-    onChapterEditClick: (Long) -> Unit
+    onChapterEditClick: (Long) -> Unit,
+    currentLang: String
 ) {
     val context = LocalContext.current
     var isSelectionMode by remember { mutableStateOf(false) }
@@ -865,6 +872,7 @@ fun ChaptersTabContent(
                                 onPreviewClick = { onPreviewClickChecked(item) },
                                 onEditClick = { onEditClickChecked(item.id) },
                                 onLongClick = { onLongClickChecked(item) },
+                                currentLang = currentLang,
                                 modifier = Modifier.shadow(elevation, RoundedCornerShape(12.dp))
                             )
                         }
@@ -993,7 +1001,7 @@ fun ChaptersTabContent(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        text = "Выделено элементов: ${selectedChapters.size}",
+                        text = Loc.t("selected_items", currentLang) + "${selectedChapters.size}",
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Bold
@@ -1236,7 +1244,7 @@ fun ChaptersTabContent(
                     )
                     Spacer(modifier = Modifier.height(20.dp))
                     Text(
-                        text = if (sourceFiles.size >= 2) "Идет слияние томов..." else "Идет экспорт в EPUB...",
+                        text = if (sourceFiles.size >= 2) Loc.t("merging_volumes", currentLang) else Loc.t("exporting_epub", currentLang),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
@@ -1244,7 +1252,7 @@ fun ChaptersTabContent(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Пожалуйста, подождите. Собираем главы и упаковываем книгу в итоговый файл EPUB.",
+                        text = Loc.t("please_wait_export", currentLang),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
@@ -1269,6 +1277,7 @@ fun ChapterRowItem(
     onPreviewClick: () -> Unit,
     onEditClick: () -> Unit,
     onLongClick: () -> Unit,
+    currentLang: String,
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -1316,7 +1325,7 @@ fun ChapterRowItem(
                     IconButton(onClick = onMoveUp, modifier = Modifier.size(24.dp)) {
                         Icon(
                             imageVector = Icons.Default.KeyboardArrowUp,
-                            contentDescription = "Вверх",
+                            contentDescription = Loc.t("up", currentLang),
                             tint = MaterialTheme.colorScheme.primary
                         )
                     }
@@ -1324,7 +1333,7 @@ fun ChapterRowItem(
                     if (reorderingEnabled && reorderState != null) {
                         Icon(
                             imageVector = Icons.Default.DragHandle,
-                            contentDescription = "Тяните для перемещения",
+                            contentDescription = Loc.t("drag_to_move", currentLang),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier
                                 .size(32.dp)
@@ -1336,7 +1345,7 @@ fun ChapterRowItem(
                     IconButton(onClick = onMoveDown, modifier = Modifier.size(24.dp)) {
                         Icon(
                             imageVector = Icons.Default.KeyboardArrowDown,
-                            contentDescription = "Вниз",
+                            contentDescription = Loc.t("down", currentLang),
                             tint = MaterialTheme.colorScheme.primary
                         )
                     }
@@ -1358,7 +1367,7 @@ fun ChapterRowItem(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "${item.wordCount} слов",
+                        text = "${item.wordCount} " + Loc.t("words", currentLang).lowercase(),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -1368,7 +1377,7 @@ fun ChapterRowItem(
                         color = MaterialTheme.colorScheme.outline
                     )
                     Text(
-                        text = "${item.characterCount} симв.",
+                        text = "${item.characterCount} " + Loc.t("chars", currentLang),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.secondary
                     )
@@ -1376,7 +1385,7 @@ fun ChapterRowItem(
                         Spacer(modifier = Modifier.width(4.dp))
                         Icon(
                             imageVector = Icons.Default.Image,
-                            contentDescription = "Содержит иллюстрации",
+                            contentDescription = Loc.t("contains_illustrations", currentLang),
                             tint = MaterialTheme.colorScheme.tertiary,
                             modifier = Modifier.size(14.dp)
                         )
@@ -1390,14 +1399,14 @@ fun ChapterRowItem(
                     IconButton(onClick = onPreviewClick) {
                         Icon(
                             imageVector = Icons.Default.Visibility,
-                            contentDescription = "Просмотр",
+                            contentDescription = Loc.t("preview", currentLang),
                             tint = MaterialTheme.colorScheme.outline
                         )
                     }
                     IconButton(onClick = onEditClick) {
                         Icon(
                             imageVector = Icons.Default.EditNote,
-                            contentDescription = "Редактировать",
+                            contentDescription = Loc.t("edit", currentLang),
                             tint = MaterialTheme.colorScheme.secondary
                         )
                     }
@@ -1413,7 +1422,8 @@ fun ChapterRowItem(
 fun InfoTabContent(
     context: Context,
     viewModel: BookViewModel,
-    title: Title
+    title: Title,
+    currentLang: String
 ) {
     val initialAuthor = title.author?.let { if (it == "Unknown Author" || it == "Автор") "" else it } ?: ""
     val initialDesc = title.description?.let { 
@@ -1460,7 +1470,7 @@ fun InfoTabContent(
                     if (!coverPath.isNullOrEmpty()) {
                         AsyncImage(
                             model = File(coverPath!!),
-                            contentDescription = "Обложка тайтла",
+                            contentDescription = Loc.t("cover_illustration", currentLang),
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize()
                         )
@@ -1488,7 +1498,7 @@ fun InfoTabContent(
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text(
-                                    text = "Выбрать обложку",
+                                    text = Loc.t("choose_cover", currentLang),
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.onSurface,
@@ -1508,7 +1518,7 @@ fun InfoTabContent(
                             contentAlignment = Alignment.BottomCenter
                         ) {
                             Text(
-                                text = "Изменить",
+                                text = Loc.t("change", currentLang),
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White,
@@ -1528,7 +1538,7 @@ fun InfoTabContent(
             OutlinedTextField(
                 value = titleName,
                 onValueChange = { titleName = it },
-                label = { Text("Название тайтла") },
+                label = { Text(Loc.t("title", currentLang)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -1539,8 +1549,8 @@ fun InfoTabContent(
             OutlinedTextField(
                 value = authorName,
                 onValueChange = { authorName = it },
-                label = { Text("Имя автора / переводчика") },
-                placeholder = { Text("Автор") },
+                label = { Text(Loc.t("author_name", currentLang)) },
+                placeholder = { Text(Loc.t("author", currentLang)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -1551,7 +1561,7 @@ fun InfoTabContent(
             OutlinedTextField(
                 value = outputFileName,
                 onValueChange = { outputFileName = it },
-                label = { Text("Имя результирующего EPUB файла") },
+                label = { Text(Loc.t("output_file_name", currentLang)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -1562,8 +1572,8 @@ fun InfoTabContent(
             OutlinedTextField(
                 value = description,
                 onValueChange = { description = it },
-                label = { Text("Описание / Синопсис") },
-                placeholder = { Text("Описание отсутствует...") },
+                label = { Text(Loc.t("description", currentLang)) },
+                placeholder = { Text(Loc.t("no_description", currentLang)) },
                 minLines = 4,
                 modifier = Modifier.fillMaxWidth()
             )
@@ -1581,14 +1591,14 @@ fun InfoTabContent(
                         coverImage = coverPath,
                         outputFileName = outputFileName.trim()
                     )
-                    Toast.makeText(context, "Информация успешно сохранена!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, Loc.t("info_saved", currentLang), Toast.LENGTH_SHORT).show()
                 },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(50.dp),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Text("Сохранить изменения", style = MaterialTheme.typography.titleMedium)
+                Text(Loc.t("save_changes", currentLang), style = MaterialTheme.typography.titleMedium)
             }
         }
     }
@@ -1600,7 +1610,8 @@ fun InfoTabContent(
 fun StatsTabContent(
     title: Title,
     sourceFiles: List<SourceFile>,
-    chapters: List<Chapter>
+    chapters: List<Chapter>,
+    currentLang: String
 ) {
     val totalWords = chapters.sumOf { it.wordCount }
     val totalCharacters = chapters.sumOf { it.characterCount }
@@ -1627,7 +1638,7 @@ fun StatsTabContent(
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
-                            text = "Всего слов",
+                            text = Loc.t("stats_words", currentLang),
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontWeight = FontWeight.Medium
