@@ -458,6 +458,9 @@ fun EditorScreen(
     // Is full screen mode active
     var isFullscreen by remember { mutableStateOf(false) }
 
+    var htmlPrefix by remember(chapterId) { mutableStateOf("") }
+    var htmlSuffix by remember(chapterId) { mutableStateOf("") }
+
     // Unified blocks state in Visual mode
     val editorBlocks = remember { mutableStateListOf<EditorBlock>() }
     val blockTextFieldValues = remember { mutableStateMapOf<String, TextFieldValue>() }
@@ -483,8 +486,42 @@ fun EditorScreen(
     LaunchedEffect(chapterId, currentChapter) {
         if (initializedChapterId != chapterId) {
             initializedChapterId = chapterId
+            val raw = currentChapter.contentHtml
+            var bodyContent = raw
+            
+            val bodyStartRegex = Regex("<\\s*(?:[a-zA-Z0-9]+:)?body[^>]*>", RegexOption.IGNORE_CASE)
+            val bodyEndRegex = Regex("</\\s*(?:[a-zA-Z0-9]+:)?body\\s*>", RegexOption.IGNORE_CASE)
+            
+            val startMatch = bodyStartRegex.find(raw)
+            var endMatch = bodyEndRegex.findAll(raw).lastOrNull()
+            if (endMatch == null) {
+                // Fallback to </html> if </body> is missing
+                val htmlEndRegex = Regex("</\\s*(?:[a-zA-Z0-9]+:)?html\\s*>", RegexOption.IGNORE_CASE)
+                endMatch = htmlEndRegex.findAll(raw).lastOrNull()
+            }
+            
+            if (startMatch != null) {
+                val startContentIdx = startMatch.range.last + 1
+                val endContentIdx = endMatch?.range?.first ?: raw.length
+                
+                if (startContentIdx <= endContentIdx) {
+                    htmlPrefix = raw.substring(0, startContentIdx) + "\n"
+                    bodyContent = raw.substring(startContentIdx, endContentIdx)
+                    htmlSuffix = if (endMatch != null) "\n" + raw.substring(endContentIdx) else ""
+                } else {
+                    htmlPrefix = ""
+                    htmlSuffix = ""
+                }
+            } else {
+                htmlPrefix = ""
+                htmlSuffix = ""
+                // Still try to strip <head> if we fallback to full content, so we don't display "Test Book" from <title> in visual mode
+                val headRegex = Regex("<head(?:\\s+[^>]*)?>.*?</head>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                bodyContent = raw.replace(headRegex, "")
+            }
+
             val parsed = withContext(Dispatchers.IO) {
-                parseHtmlToEditorBlocks(currentChapter.contentHtml, context, currentChapter.titleId)
+                parseHtmlToEditorBlocks(bodyContent, context, currentChapter.titleId)
             }
             editorBlocks.clear()
             editorBlocks.addAll(parsed)
@@ -495,7 +532,6 @@ fun EditorScreen(
                     blockTextFieldValues[b.id] = TextFieldValue(annotatedString = ann)
                 }
             }
-            val raw = currentChapter.contentHtml
             htmlTextState = TextFieldValue(if (raw == "<p>Введите...</p>" || raw.contains("Введите текст вашей новой главы")) "" else raw)
             chapterTitle = currentChapter.title
         }
@@ -508,7 +544,49 @@ fun EditorScreen(
             val htmlText = htmlTextState.text
             val htmlCursor = htmlTextState.selection.start
             
-            val parsed = parseHtmlToEditorBlocks(htmlText, context, currentChapter.titleId)
+            var bodyContent = htmlText
+            var localCursor = htmlCursor
+
+            val bodyStartRegex = Regex("<\\s*(?:[a-zA-Z0-9]+:)?body[^>]*>", RegexOption.IGNORE_CASE)
+            val bodyEndRegex = Regex("</\\s*(?:[a-zA-Z0-9]+:)?body\\s*>", RegexOption.IGNORE_CASE)
+            val startMatch = bodyStartRegex.find(htmlText)
+            var endMatch = bodyEndRegex.findAll(htmlText).lastOrNull()
+            
+            if (endMatch == null) {
+                val htmlEndRegex = Regex("</\\s*(?:[a-zA-Z0-9]+:)?html\\s*>", RegexOption.IGNORE_CASE)
+                endMatch = htmlEndRegex.findAll(htmlText).lastOrNull()
+            }
+
+            if (startMatch != null) {
+                val startContentIdx = startMatch.range.last + 1
+                val endContentIdx = endMatch?.range?.first ?: htmlText.length
+                
+                if (startContentIdx <= endContentIdx) {
+                    htmlPrefix = htmlText.substring(0, startContentIdx) + "\n"
+                    bodyContent = htmlText.substring(startContentIdx, endContentIdx)
+                    htmlSuffix = if (endMatch != null) "\n" + htmlText.substring(endContentIdx) else ""
+                    
+                    localCursor = htmlCursor - startContentIdx
+                    if (localCursor < 0) localCursor = 0
+                    if (localCursor > bodyContent.length) localCursor = bodyContent.length
+                } else {
+                    htmlPrefix = ""
+                    htmlSuffix = ""
+                }
+            } else {
+                htmlPrefix = ""
+                htmlSuffix = ""
+                val headRegex = Regex("<head(?:\\s+[^>]*)?>.*?</head>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                bodyContent = htmlText.replace(headRegex, "")
+                
+                // Approximate cursor mapping since head is removed
+                val removedLen = htmlText.length - bodyContent.length
+                localCursor = htmlCursor - removedLen
+                if (localCursor < 0) localCursor = 0
+                if (localCursor > bodyContent.length) localCursor = bodyContent.length
+            }
+            
+            val parsed = parseHtmlToEditorBlocks(bodyContent, context, currentChapter.titleId)
             editorBlocks.clear()
             editorBlocks.addAll(parsed)
             blockTextFieldValues.clear()
@@ -520,16 +598,16 @@ fun EditorScreen(
             }
             
             // Map cursor from HTML to Visual
-            val plainOffset = findPlainOffsetFromHtmlOffset(htmlText, htmlCursor)
+            val plainOffset = findPlainOffsetFromHtmlOffset(bodyContent, localCursor)
             val blockMapping = mapPlainOffsetToBlock(parsed, blockTextFieldValues, plainOffset)
             if (blockMapping != null) {
-                val (blockIdx, localOffset) = blockMapping
+                val (blockIdx, localOffsetInner) = blockMapping
                 activeBlockIndex = blockIdx
                 val block = parsed[blockIdx]
                 if (block is EditorBlock.Text) {
                     val currentTf = blockTextFieldValues[block.id]
                     if (currentTf != null) {
-                        blockTextFieldValues[block.id] = currentTf.copy(selection = androidx.compose.ui.text.TextRange(localOffset))
+                        blockTextFieldValues[block.id] = currentTf.copy(selection = androidx.compose.ui.text.TextRange(localOffsetInner))
                     }
                 }
                 
@@ -550,8 +628,15 @@ fun EditorScreen(
         } else {
             // Visual Blocks to HTML
             val activeIdx = activeBlockIndex
-            val convertedHtml = serializeEditorBlocksToHtml(editorBlocks, blockTextFieldValues)
+            val convertedBodyHtml = serializeEditorBlocksToHtml(editorBlocks, blockTextFieldValues)
             
+            val fullHtml = if (htmlPrefix.isNotEmpty() || htmlSuffix.isNotEmpty()) {
+                htmlPrefix + convertedBodyHtml + htmlSuffix
+            } else {
+                convertedBodyHtml
+            }
+            
+            var bodyOffsetHtml = 0
             if (activeIdx != null && activeIdx in editorBlocks.indices) {
                 val activeBlock = editorBlocks[activeIdx]
                 if (activeBlock is EditorBlock.Text) {
@@ -573,21 +658,30 @@ fun EditorScreen(
                     }
                     accumulatedPlain += blockCursor
                     
-                    val htmlOffset = findHtmlOffsetFromPlainOffset(convertedHtml, accumulatedPlain)
-                    htmlTextState = TextFieldValue(convertedHtml, androidx.compose.ui.text.TextRange(htmlOffset))
+                    bodyOffsetHtml = findHtmlOffsetFromPlainOffset(convertedBodyHtml, accumulatedPlain)
                 } else {
-                    htmlTextState = TextFieldValue(convertedHtml, androidx.compose.ui.text.TextRange(convertedHtml.length))
+                    bodyOffsetHtml = convertedBodyHtml.length
                 }
             } else {
-                htmlTextState = TextFieldValue(convertedHtml, androidx.compose.ui.text.TextRange(convertedHtml.length))
+                bodyOffsetHtml = convertedBodyHtml.length
             }
+            
+            val finalCursor = htmlPrefix.length + bodyOffsetHtml
+            htmlTextState = TextFieldValue(fullHtml, androidx.compose.ui.text.TextRange(finalCursor))
             
             isHtmlMode = true
         }
     }
 
     val currentContentText = {
-        if (isHtmlMode) htmlTextState.text else serializeEditorBlocksToHtml(editorBlocks, blockTextFieldValues)
+        if (isHtmlMode) htmlTextState.text else {
+            val convertedBodyHtml = serializeEditorBlocksToHtml(editorBlocks, blockTextFieldValues)
+            if (htmlPrefix.isNotEmpty() || htmlSuffix.isNotEmpty()) {
+                htmlPrefix + convertedBodyHtml + htmlSuffix
+            } else {
+                convertedBodyHtml
+            }
+        }
     }
 
     val totalWords by remember {
