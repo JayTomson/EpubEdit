@@ -13,7 +13,9 @@ data class Title(
     val description: String? = "",
     val coverImage: String? = null,
     val outputFileName: String? = "",
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val originalEpubDirPath: String? = null,
+    val originalOpfRelativePath: String? = null
 )
 
 @Entity(
@@ -70,5 +72,6 @@ data class Chapter(
     val orderIndex: Int = 0,
     val wordCount: Int = 0,
     val characterCount: Int = 0,
-    val previewImagePath: String? = null
+    val previewImagePath: String? = null,
+    val originalFilePath: String? = null
 )

@@ -14,7 +14,9 @@ data class ParsedEpub(
     val author: String?,
     val description: String?,
     val coverImagePath: String?,
-    val chapters: List<ParsedChapter>
+    val chapters: List<ParsedChapter>,
+    val originalEpubDirPath: String? = null,
+    val originalOpfRelativePath: String? = null
 )
 
 data class ParsedChapter(
@@ -22,7 +24,8 @@ data class ParsedChapter(
     val contentHtml: String,
     val wordCount: Int,
     val characterCount: Int,
-    val previewImagePath: String? = null
+    val previewImagePath: String? = null,
+    val originalFilePath: String? = null
 )
 
 object EpubProcessor {
@@ -70,6 +73,29 @@ object EpubProcessor {
             Log.e(TAG, "Error unzipping EPUB", e)
             tempDir.deleteRecursively()
             return null
+        }
+
+        var savedOriginalEpubDirPath: String? = null
+        if (keepOriginal && titleId != null) {
+            try {
+                val originalEpubDir = File(context.filesDir, "epub_originals/book_$titleId")
+                if (originalEpubDir.exists()) originalEpubDir.deleteRecursively()
+                originalEpubDir.mkdirs()
+                
+                fun copyRecursively(src: File, dst: File) {
+                    if (src.isDirectory) {
+                        dst.mkdirs()
+                        src.listFiles()?.forEach { copyRecursively(it, File(dst, it.name)) }
+                    } else {
+                        src.copyTo(dst, overwrite = true)
+                    }
+                }
+                copyRecursively(tempDir, originalEpubDir)
+                savedOriginalEpubDirPath = originalEpubDir.absolutePath
+                Log.d(TAG, "Saved 100% original EPUB structure to $savedOriginalEpubDirPath")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to save original epub structure", e)
+            }
         }
 
         try {
@@ -174,6 +200,7 @@ object EpubProcessor {
             }
         }
         val opfFile = File(tempDir, opfPath)
+        val opfRelativePath = try { opfFile.relativeTo(tempDir).path.replace('\\', '/') } catch(e: Exception) { opfPath }
         val opfDir = opfFile.parentFile ?: tempDir
 
         // Extract metadata, manifest, and spine from OPF
@@ -578,7 +605,8 @@ object EpubProcessor {
                             contentHtml = cleanedHtmlSegment,
                             wordCount = words,
                             characterCount = chars,
-                            previewImagePath = chapPreviewImagePath
+                            previewImagePath = chapPreviewImagePath,
+                            originalFilePath = try { chapterFile.relativeTo(tempDir).path.replace('\\', '/') } catch(e: Exception) { null }
                         ))
                     }
                 } catch (e: Exception) {
@@ -617,7 +645,8 @@ object EpubProcessor {
                                 contentHtml = cleanedHtmlContent,
                                 wordCount = words,
                                 characterCount = chars,
-                                previewImagePath = chapPreviewImagePath
+                                previewImagePath = chapPreviewImagePath,
+                                originalFilePath = try { chapterFile.relativeTo(tempDir).path.replace('\\', '/') } catch(e: Exception) { null }
                             ))
                         }
                     } catch (e: Exception) {
@@ -653,7 +682,8 @@ object EpubProcessor {
                         contentHtml = cleanedHtmlContent,
                         wordCount = words,
                         characterCount = chars,
-                        previewImagePath = chapPreviewImagePath
+                        previewImagePath = chapPreviewImagePath,
+                        originalFilePath = try { file.relativeTo(tempDir).path.replace('\\', '/') } catch(e: Exception) { null }
                     ))
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed sorting fallback on ${file.name}", e)
@@ -671,7 +701,9 @@ object EpubProcessor {
                 author = defaultAuthor,
                 description = defaultDesc,
                 coverImagePath = coverImagePath,
-                chapters = chaptersList
+                chapters = chaptersList,
+                originalEpubDirPath = savedOriginalEpubDirPath,
+                originalOpfRelativePath = opfRelativePath
             )
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing unzipped EPUB", e)
@@ -1015,7 +1047,14 @@ object EpubProcessor {
         generateToc: Boolean = true
     ): File? {
         val prefs = context.getSharedPreferences("app_settings", Context.MODE_PRIVATE)
-        val bookLanguage = prefs?.getString("pref_language", "ru") ?: "ru"
+        val keepOriginalSetting = !prefs.getBoolean("pref_convert_epub_system", true)
+        if (keepOriginalSetting && titleId != null) {
+            val result = exportFromOriginalArchive(context, fileName, titleId, chapters)
+            if (result != null) return result
+            Log.d(TAG, "exportToEpub: Falling back to scratch generation because original archive was missing or failed.")
+        }
+
+        val bookLanguage = prefs.getString("pref_language", "ru") ?: "ru"
         val sanitizedFileName = if (fileName.endsWith(".epub", ignoreCase = true)) fileName else "$fileName.epub"
         
         val tempOutputFile = File(context.cacheDir, "temp_export_${System.currentTimeMillis()}_$sanitizedFileName")
@@ -1367,6 +1406,80 @@ object EpubProcessor {
                     tempOutputFile.delete()
                 }
             } catch (ignored: Exception) {}
+            return null
+        }
+    }
+
+    private fun exportFromOriginalArchive(
+        context: Context,
+        fileName: String,
+        titleId: Long,
+        chapters: List<ParsedChapter>
+    ): File? {
+        val originalEpubDir = File(context.filesDir, "epub_originals/book_$titleId")
+        if (!originalEpubDir.exists()) {
+            Log.d(TAG, "exportFromOriginalArchive: originalEpubDir does not exist for book_$titleId")
+            return null
+        }
+
+        val sanitizedFileName = if (fileName.endsWith(".epub", ignoreCase = true)) fileName else "$fileName.epub"
+        val tempOutputFile = File(context.cacheDir, "temp_export_orig_${System.currentTimeMillis()}_$sanitizedFileName")
+
+        // Group chapters by original file path to handle split files
+        val chapterOverrides = chapters
+            .filter { it.originalFilePath != null }
+            .groupBy { it.originalFilePath!! }
+            .mapValues { (_, chs) ->
+                // If keepOriginal was on, contentHtml should already be full HTML or segment with tags
+                chs.joinToString("\n") { it.contentHtml }
+            }
+
+        try {
+            FileOutputStream(tempOutputFile).use { fos ->
+                ZipOutputStream(BufferedOutputStream(fos)).use { zos ->
+                    // 1. mimetype (Must be FIRST and STORED uncompressed)
+                    val mimeFile = File(originalEpubDir, "mimetype")
+                    val mimeBytes = if (mimeFile.exists()) {
+                        mimeFile.readBytes()
+                    } else {
+                        "application/epub+zip".toByteArray(Charsets.US_ASCII)
+                    }
+                    val mimeEntry = ZipEntry("mimetype")
+                    mimeEntry.method = ZipEntry.STORED
+                    mimeEntry.size = mimeBytes.size.toLong()
+                    mimeEntry.compressedSize = mimeBytes.size.toLong()
+                    val crc = java.util.zip.CRC32().apply { update(mimeBytes) }
+                    mimeEntry.crc = crc.value
+                    zos.putNextEntry(mimeEntry)
+                    zos.write(mimeBytes)
+                    zos.closeEntry()
+
+                    fun walk(dir: File) {
+                        dir.listFiles()?.sortedBy { it.name }?.forEach { f ->
+                            if (f.isDirectory) {
+                                walk(f)
+                            } else {
+                                val relPath = f.relativeTo(originalEpubDir).path.replace('\\', '/')
+                                if (relPath == "mimetype") return@forEach
+
+                                zos.putNextEntry(ZipEntry(relPath))
+                                val override = chapterOverrides[relPath]
+                                if (override != null) {
+                                    zos.write(override.toByteArray(Charsets.UTF_8))
+                                } else {
+                                    f.inputStream().use { it.copyTo(zos) }
+                                }
+                                zos.closeEntry()
+                            }
+                        }
+                    }
+                    walk(originalEpubDir)
+                }
+            }
+            return saveFileToPublicDownloads(context, tempOutputFile, sanitizedFileName)
+        } catch (e: Exception) {
+            Log.e(TAG, "exportFromOriginalArchive failed", e)
+            if (tempOutputFile.exists()) tempOutputFile.delete()
             return null
         }
     }

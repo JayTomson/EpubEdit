@@ -163,6 +163,12 @@ class BookViewModel(private val app: Application, private val repository: BookRe
                     if (bookMediaDir.exists()) {
                         bookMediaDir.deleteRecursively()
                     }
+
+                    // Clean up original archive if it exists
+                    val originalEpubDir = File(app.filesDir, "epub_originals/book_${title.id}")
+                    if (originalEpubDir.exists()) {
+                        originalEpubDir.deleteRecursively()
+                    }
                     
                     // Clean up custom cover file if it exists and lies in filesDir
                     title.coverImage?.let { path ->
@@ -241,8 +247,12 @@ class BookViewModel(private val app: Application, private val repository: BookRe
 
                 // If cover image was extracted and the book doesn't have a cover yet, update it
                 val currentTitle = repository.getTitleByIdOneShot(titleId)
-                if (currentTitle != null && currentTitle.coverImage.isNullOrEmpty() && parsed.coverImagePath != null) {
-                    val updatedTitle = currentTitle.copy(coverImage = parsed.coverImagePath)
+                if (currentTitle != null) {
+                    val updatedTitle = currentTitle.copy(
+                        coverImage = if (currentTitle.coverImage.isNullOrEmpty()) parsed.coverImagePath else currentTitle.coverImage,
+                        originalEpubDirPath = parsed.originalEpubDirPath,
+                        originalOpfRelativePath = parsed.originalOpfRelativePath
+                    )
                     repository.updateTitle(updatedTitle)
                 }
 
@@ -259,7 +269,8 @@ class BookViewModel(private val app: Application, private val repository: BookRe
                              orderIndex = nextChapterIndex + i,
                              wordCount = pc.wordCount,
                              characterCount = pc.characterCount,
-                             previewImagePath = pc.previewImagePath
+                             previewImagePath = pc.previewImagePath,
+                             originalFilePath = pc.originalFilePath
                          )
                      )
                  }
@@ -304,11 +315,15 @@ class BookViewModel(private val app: Application, private val repository: BookRe
                         )
 
                         val currentTitle = repository.getTitleByIdOneShot(titleId)
-                        if (currentTitle != null && currentTitle.coverImage.isNullOrEmpty() && parsed.coverImagePath != null) {
-                            val updatedTitle = currentTitle.copy(coverImage = parsed.coverImagePath)
+                        if (currentTitle != null) {
+                            val updatedTitle = currentTitle.copy(
+                                coverImage = if (currentTitle.coverImage.isNullOrEmpty()) parsed.coverImagePath else currentTitle.coverImage,
+                                originalEpubDirPath = parsed.originalEpubDirPath,
+                                originalOpfRelativePath = parsed.originalOpfRelativePath
+                            )
                             repository.updateTitle(updatedTitle)
                         }
-
+ 
                         val nextChapterIndex = repository.getChaptersForTitleOneShot(titleId).size
                         parsed.chapters.forEachIndexed { i, pc ->
                             Log.d("BOOK_DEBUG", "convertAndImportFile: Inserting chapter #$i [${pc.title}] to DB")
@@ -321,7 +336,8 @@ class BookViewModel(private val app: Application, private val repository: BookRe
                                     orderIndex = nextChapterIndex + i,
                                     wordCount = pc.wordCount,
                                     characterCount = pc.characterCount,
-                                    previewImagePath = pc.previewImagePath
+                                    previewImagePath = pc.previewImagePath,
+                                    originalFilePath = pc.originalFilePath
                                 )
                             )
                         }
@@ -491,7 +507,8 @@ class BookViewModel(private val app: Application, private val repository: BookRe
                         contentHtml = it.contentHtml,
                         wordCount = it.wordCount,
                         characterCount = it.characterCount,
-                        previewImagePath = it.previewImagePath
+                        previewImagePath = it.previewImagePath,
+                        originalFilePath = it.originalFilePath
                     )
                 }
 
