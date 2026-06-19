@@ -226,11 +226,25 @@ fun isCursorOnEmptyLine(tf: TextFieldValue): Boolean {
 
 fun extractBodyForDisplay(html: String): String {
     if (!html.contains("<body", ignoreCase = true)) return html
-    val bodyRegex = Regex(
-        "<body(?:\\s+[^>]*)?>(.+?)</body>",
-        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
-    )
-    return bodyRegex.find(html)?.groupValues?.get(1)?.trim() ?: html
+
+    // Ищем открывающий <body ...>
+    val bodyOpenRegex = Regex("<body(?:\\s+[^>]*)?>", RegexOption.IGNORE_CASE)
+    val openMatch = bodyOpenRegex.find(html) ?: return html
+
+    val contentStart = openMatch.range.last + 1
+
+    // Ищем закрывающий </body> с конца (lastIndexOf)
+    val closeTag = "</body>"
+    val contentEnd = html.lowercase().lastIndexOf(closeTag)
+
+    return if (contentEnd > contentStart) {
+        html.substring(contentStart, contentEnd).trim()
+    } else {
+        // </body> не найден — берём всё от <body> до конца, убираем лишние теги
+        html.substring(contentStart)
+            .replace(Regex("</html>\\s*$", RegexOption.IGNORE_CASE), "")
+            .trim()
+    }
 }
 
 fun handleHtmlAutoClose(oldState: TextFieldValue, newState: TextFieldValue): TextFieldValue {
@@ -503,10 +517,14 @@ fun EditorScreen(
             // Still need prefix/suffix for merging back if displayHtml was extracted from a full file
             val bodyStartMatch = Regex("<body(?:\\s+[^>]*)?>", RegexOption.IGNORE_CASE).find(raw)
             val bodyCloseIdx = raw.lowercase().lastIndexOf("</body>")
-            
-            if (bodyStartMatch != null && bodyCloseIdx != -1) {
+
+            if (bodyStartMatch != null && bodyCloseIdx != -1 && bodyCloseIdx > bodyStartMatch.range.last) {
                 htmlPrefix = raw.substring(0, bodyStartMatch.range.last + 1)
-                htmlSuffix = raw.substring(bodyCloseIdx)
+                htmlSuffix = raw.substring(bodyCloseIdx)  // включает </body></html>
+            } else if (bodyStartMatch != null) {
+                // <body> есть, но </body> не найден — берём до конца
+                htmlPrefix = raw.substring(0, bodyStartMatch.range.last + 1)
+                htmlSuffix = "\n</body>\n</html>"  // добавляем закрывающие теги
             } else {
                 htmlPrefix = ""
                 htmlSuffix = ""
@@ -872,15 +890,27 @@ fun EditorScreen(
     val performSave = {
         val editedBody = if (isHtmlMode) {
             val full = htmlTextState.text
-            // Extract body if we are in HTML mode and it has tags
-            val match = Regex("<body(?:\\s+[^>]*)?>(.+?)</body>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).find(full)
-            match?.groupValues?.get(1)?.trim() ?: full
+            // Используем ту же надёжную функцию что и при инициализации
+            if (full.contains("<body", ignoreCase = true)) {
+                extractBodyForDisplay(full)
+            } else {
+                full
+            }
         } else {
             serializeEditorBlocksToHtml(editorBlocks, blockTextFieldValues)
         }
 
         val finalFullHtml = if (htmlPrefix.isNotEmpty() && htmlSuffix.isNotEmpty()) {
-            "$htmlPrefix\n$editedBody\n$htmlSuffix"
+            // Финальная защита: проверяем что editedBody не содержит html-обёртку
+            // (на случай если beautifyHtml вернул полный файл в htmlTextState)
+            val cleanBody = if (editedBody.contains("<html", ignoreCase = true) ||
+                                editedBody.contains("</body>", ignoreCase = true) ||
+                                editedBody.contains("</html>", ignoreCase = true)) {
+                extractBodyForDisplay(editedBody)
+            } else {
+                editedBody
+            }
+            "$htmlPrefix\n$cleanBody\n$htmlSuffix"
         } else {
             editedBody
         }
