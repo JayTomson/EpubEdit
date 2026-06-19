@@ -5,6 +5,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.lifecycle.ViewModelProvider
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -32,7 +34,9 @@ class MainActivity : ComponentActivity() {
         val viewModel = ViewModelProvider(this, viewModelFactory)[BookViewModel::class.java]
 
         setContent {
-            MyApplicationTheme {
+            val currentThemeName by viewModel.currentTheme.collectAsState()
+            
+            MyApplicationTheme(themeName = currentThemeName) {
                 val navController = rememberNavController()
 
                 NavHost(

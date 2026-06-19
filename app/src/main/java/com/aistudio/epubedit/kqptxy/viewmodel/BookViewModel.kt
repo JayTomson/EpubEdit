@@ -28,11 +28,19 @@ class BookViewModel(private val app: Application, private val repository: BookRe
     private val _currentLanguage = MutableStateFlow(prefs.getString("pref_language", "ru") ?: "ru")
     val currentLanguage: StateFlow<String> = _currentLanguage.asStateFlow()
 
+    private val _currentTheme = MutableStateFlow(prefs.getString("pref_theme", "dark") ?: "dark")
+    val currentTheme: StateFlow<String> = _currentTheme.asStateFlow()
+
     private val _htmlAutoCloseEnabled = MutableStateFlow(prefs.getBoolean("pref_html_autoclose", false))
     val htmlAutoCloseEnabled: StateFlow<Boolean> = _htmlAutoCloseEnabled.asStateFlow()
 
     private val _reorderingEnabled = MutableStateFlow(prefs.getBoolean("pref_reordering", true))
     val reorderingEnabled: StateFlow<Boolean> = _reorderingEnabled.asStateFlow()
+
+    fun updateTheme(themeName: String) {
+        prefs.edit().putString("pref_theme", themeName).apply()
+        _currentTheme.value = themeName
+    }
 
     fun updateLanguage(lang: String) {
         prefs.edit().putString("pref_language", lang).apply()

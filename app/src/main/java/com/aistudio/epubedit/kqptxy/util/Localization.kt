@@ -96,7 +96,12 @@ object Loc {
         "cover_illustration" to "Обложка тайтла",
         "auto_close_desc" to "Автоматически закрывать HTML-теги при вводе >",
         "enable_drag_drop" to "Перетаскивание зажатием",
-        "drag_drop_desc" to "Зажмите элемент между кнопками, чтобы полноценно перетаскивать его"
+        "drag_drop_desc" to "Зажмите элемент между кнопками, чтобы полноценно перетаскивать его",
+        "theme" to "Тема приложения",
+        "theme_light" to "Светлая",
+        "theme_dark" to "Темная",
+        "theme_amoled" to "AMOLED",
+        "chapter_illustration" to "Иллюстрация главы"
     )
 
     private val en = mapOf(
@@ -194,7 +199,12 @@ object Loc {
         "cover_illustration" to "Title cover",
         "auto_close_desc" to "Automatically insert closing tags when typing >",
         "enable_drag_drop" to "Enable Drag and Drop",
-        "drag_drop_desc" to "Long press to reorder items"
+        "drag_drop_desc" to "Long press to reorder items",
+        "theme" to "App Theme",
+        "theme_light" to "Light",
+        "theme_dark" to "Dark",
+        "theme_amoled" to "AMOLED",
+        "chapter_illustration" to "Chapter illustration"
     )
 
     fun t(key: String, lang: String): String {

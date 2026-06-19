@@ -886,7 +886,7 @@ fun EditorScreen(
                                         if (isImageValid) {
                                             AsyncImage(
                                                 model = File(block.localPath),
-                                                contentDescription = "Иллюстрация главы",
+                                                contentDescription = Loc.t("chapter_illustration", lang),
                                                 modifier = Modifier
                                                     .fillMaxWidth()
                                                     .heightIn(max = 280.dp)

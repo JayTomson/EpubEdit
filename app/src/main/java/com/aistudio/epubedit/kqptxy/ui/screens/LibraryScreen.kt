@@ -339,7 +339,7 @@ fun LibraryScreen(
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = if (currentLang == "en") "Automatically insert closing tags when typing >" else "Автоматически закрывать HTML-теги при вводе >",
+                                text = Loc.t("auto_close_desc", currentLang),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -368,14 +368,14 @@ fun LibraryScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                             Text(
-                                text = if (currentLang == "en") "Enable Drag and Drop" else "Перетаскивание зажатием",
+                                text = Loc.t("enable_drag_drop", currentLang),
                                 style = MaterialTheme.typography.bodyLarge,
                                 fontWeight = FontWeight.Bold,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = if (currentLang == "en") "Long press to reorder items" else "Зажмите элемент между кнопками, чтобы полноценно перетаскивать его",
+                                text = Loc.t("drag_drop_desc", currentLang),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -388,6 +388,47 @@ fun LibraryScreen(
                                 checkedTrackColor = MaterialTheme.colorScheme.primary
                             )
                         )
+                    }
+                    
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    // Category: Theme Selection
+                    val currentTheme by viewModel.currentTheme.collectAsState()
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = Loc.t("theme", currentLang),
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            val themes = listOf(
+                                "light" to Loc.t("theme_light", currentLang),
+                                "dark" to Loc.t("theme_dark", currentLang),
+                                "amoled" to Loc.t("theme_amoled", currentLang)
+                            )
+                            themes.forEach { (themeId, themeName) ->
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(if (currentTheme == themeId) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
+                                        .clickable { viewModel.updateTheme(themeId) }
+                                        .padding(vertical = 12.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = themeName,
+                                        color = if (currentTheme == themeId) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             },
