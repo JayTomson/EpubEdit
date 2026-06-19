@@ -1556,6 +1556,33 @@ $bodyParts
             baseDir.substringAfter("OEBPS/", baseDir).substringAfter("OPS/", baseDir)
         }
 
+        // Find NCX and NAV paths
+        val ncxItemMatch = Regex("<item[^>]*media-type=\"application/x-dtbncx\\+xml\"[^>]*href=\"([^\"]+)\"").find(opfText)
+            ?: Regex("<item[^>]*href=\"([^\"]+)\"[^>]*media-type=\"application/x-dtbncx\\+xml\"").find(opfText)
+        val ncxHrefRelative = ncxItemMatch?.groupValues?.get(1)
+        val ncxPath = if (ncxHrefRelative != null) {
+            if (opfFolder.isNotEmpty()) "$opfFolder/$ncxHrefRelative" else ncxHrefRelative
+        } else null
+
+        val navItemMatch = Regex("<item[^>]*properties=\"[^\"]*nav[^\"]*\"[^>]*href=\"([^\"]+)\"").find(opfText)
+            ?: Regex("<item[^>]*href=\"([^\"]+)\"[^>]*properties=\"[^\"]*nav[^\"]*\"").find(opfText)
+        val navHrefRelative = navItemMatch?.groupValues?.get(1)
+        val navPath = if (navHrefRelative != null) {
+            if (opfFolder.isNotEmpty()) "$opfFolder/$navHrefRelative" else navHrefRelative
+        } else null
+
+        var ncxText: String? = null
+        if (ncxPath != null) {
+            val ncxFile = File(originalEpubDir, ncxPath)
+            if (ncxFile.exists()) ncxText = ncxFile.readText()
+        }
+
+        var navText: String? = null
+        if (navPath != null) {
+            val navFile = File(originalEpubDir, navPath)
+            if (navFile.exists()) navText = navFile.readText()
+        }
+
         if (newChapters.isNotEmpty() && opfText.isNotEmpty()) {
             val manifestInsert = buildString {
                 newChapters.forEachIndexed { index, _ ->
@@ -1571,6 +1598,58 @@ $bodyParts
                 }
             }
             opfText = opfText.replace("</spine>", "$spineInsert\n</spine>")
+
+            // Update NCX
+            if (ncxText != null) {
+                val ncxFolder = if (ncxPath?.contains("/") == true) ncxPath.substringBeforeLast("/") else ""
+                val relativeSrcBase = if (ncxFolder.isNotEmpty() && baseDir.startsWith(ncxFolder)) {
+                    baseDir.removePrefix(ncxFolder).removePrefix("/")
+                } else if (opfFolder.isNotEmpty() && baseDir.startsWith(opfFolder)) {
+                     baseDir.removePrefix(opfFolder).removePrefix("/")
+                } else {
+                     baseDir
+                }
+
+                val ncxInsert = buildString {
+                    newChapters.forEachIndexed { index, chapter ->
+                        val href = if (relativeSrcBase.isNotEmpty()) "$relativeSrcBase/new_chapter_${index + 1}.xhtml" else "new_chapter_${index + 1}.xhtml"
+                        append("\n<navPoint id=\"newnav$index\" playOrder=\"${1000 + index}\">")
+                        append("\n<navLabel><text>${escapeXml(chapter.title)}</text></navLabel>")
+                        append("\n<content src=\"$href\"/>")
+                        append("\n</navPoint>")
+                    }
+                }
+                ncxText = ncxText?.replace("</navMap>", "$ncxInsert\n</navMap>")
+            }
+
+            // Update NAV
+            if (navText != null) {
+                val navFolder = if (navPath?.contains("/") == true) navPath.substringBeforeLast("/") else ""
+                val relativeSrcBase = if (navFolder.isNotEmpty() && baseDir.startsWith(navFolder)) {
+                    baseDir.removePrefix(navFolder).removePrefix("/")
+                } else if (opfFolder.isNotEmpty() && baseDir.startsWith(opfFolder)) {
+                     baseDir.removePrefix(opfFolder).removePrefix("/")
+                } else {
+                     baseDir
+                }
+
+                val navInsert = buildString {
+                    newChapters.forEachIndexed { index, chapter ->
+                        val href = if (relativeSrcBase.isNotEmpty()) "$relativeSrcBase/new_chapter_${index + 1}.xhtml" else "new_chapter_${index + 1}.xhtml"
+                        append("\n<li><a href=\"$href\">${escapeXml(chapter.title)}</a></li>")
+                    }
+                }
+                // Try to find the toc nav specifically
+                val tocNavRegex = Regex("(<nav[^>]*epub:type=\"toc\"[^>]*>.*?<ol[^>]*>)(.*?)(</ol>)", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                if (tocNavRegex.containsMatchIn(navText!!)) {
+                    navText = tocNavRegex.replace(navText!!) { match ->
+                        "${match.groupValues[1]}${match.groupValues[2]}$navInsert${match.groupValues[3]}"
+                    }
+                } else {
+                    // Fallback to first ol
+                    navText = navText?.replaceFirst("</ol>", "$navInsert\n</ol>")
+                }
+            }
         }
 
         try {
@@ -1605,6 +1684,10 @@ $bodyParts
                                 
                                 if (relPath == opfRelativePath && opfText.isNotEmpty()) {
                                     zos.write(opfText.toByteArray(Charsets.UTF_8))
+                                } else if (ncxPath != null && relPath == ncxPath && ncxText != null) {
+                                    zos.write(ncxText!!.toByteArray(Charsets.UTF_8))
+                                } else if (navPath != null && relPath == navPath && navText != null) {
+                                    zos.write(navText!!.toByteArray(Charsets.UTF_8))
                                 } else {
                                     val override = chapterOverrides[relPath]
                                     if (override != null) {
