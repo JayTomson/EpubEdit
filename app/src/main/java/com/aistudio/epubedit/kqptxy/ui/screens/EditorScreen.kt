@@ -515,9 +515,15 @@ fun EditorScreen(
             } else {
                 htmlPrefix = ""
                 htmlSuffix = ""
-                // Still try to strip <head> if we fallback to full content, so we don't display "Test Book" from <title> in visual mode
+                // Still try to strip <head>, <title>, <meta>, <link> if we fallback to full content, so we don't display them in visual mode
                 val headRegex = Regex("<head(?:\\s+[^>]*)?>.*?</head>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                val titleRegex = Regex("<title(?:\\s+[^>]*)?>.*?</title>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                val metaRegex = Regex("<meta(?:\\s+[^>]*)?/?>", RegexOption.IGNORE_CASE)
+                val linkRegex = Regex("<link(?:\\s+[^>]*)?/?>", RegexOption.IGNORE_CASE)
                 bodyContent = raw.replace(headRegex, "")
+                    .replace(titleRegex, "")
+                    .replace(metaRegex, "")
+                    .replace(linkRegex, "")
             }
 
             val parsed = withContext(Dispatchers.IO) {
@@ -532,7 +538,8 @@ fun EditorScreen(
                     blockTextFieldValues[b.id] = TextFieldValue(annotatedString = ann)
                 }
             }
-            htmlTextState = TextFieldValue(if (raw == "<p>Введите...</p>" || raw.contains("Введите текст вашей новой главы")) "" else raw)
+            val initialHtmlText = if (htmlPrefix.isEmpty() && htmlSuffix.isEmpty()) bodyContent else htmlPrefix + bodyContent + htmlSuffix
+            htmlTextState = TextFieldValue(if (raw == "<p>Введите...</p>" || raw.contains("Введите текст вашей новой главы")) "" else initialHtmlText)
             chapterTitle = currentChapter.title
         }
     }
@@ -577,7 +584,13 @@ fun EditorScreen(
                 htmlPrefix = ""
                 htmlSuffix = ""
                 val headRegex = Regex("<head(?:\\s+[^>]*)?>.*?</head>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                val titleRegex = Regex("<title(?:\\s+[^>]*)?>.*?</title>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+                val metaRegex = Regex("<meta(?:\\s+[^>]*)?/?>", RegexOption.IGNORE_CASE)
+                val linkRegex = Regex("<link(?:\\s+[^>]*)?/?>", RegexOption.IGNORE_CASE)
                 bodyContent = htmlText.replace(headRegex, "")
+                    .replace(titleRegex, "")
+                    .replace(metaRegex, "")
+                    .replace(linkRegex, "")
                 
                 // Approximate cursor mapping since head is removed
                 val removedLen = htmlText.length - bodyContent.length

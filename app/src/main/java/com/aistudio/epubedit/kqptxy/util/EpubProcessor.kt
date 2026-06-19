@@ -77,6 +77,7 @@ object EpubProcessor {
             val htmlFiles = mutableListOf<File>()
             val imageFiles = mutableListOf<File>()
             val cssFiles = mutableListOf<File>()
+            val otherFiles = mutableListOf<File>()
 
             fun scanDir(dir: File) {
                 dir.listFiles()?.forEach { file ->
@@ -90,13 +91,15 @@ object EpubProcessor {
                             imageFiles.add(file)
                         } else if (ext == "css") {
                             cssFiles.add(file)
+                        } else if (ext in listOf("ttf", "otf", "woff", "woff2", "js", "mp3", "mp4", "m4a", "ogg", "wav", "xml")) {
+                            otherFiles.add(file)
                         }
                     }
                 }
             }
             scanDir(tempDir)
 
-            // 3. Keep extracted images persistently in a media folder
+            // 3. Keep extracted assets persistently
             val mediaDir = File(context.filesDir, "epub_media")
             val bookMediaDir = if (titleId != null) File(mediaDir, "book_$titleId") else mediaDir
             if (!bookMediaDir.exists()) bookMediaDir.mkdirs()
@@ -112,9 +115,24 @@ object EpubProcessor {
                     val destFile = File(cssDir, relativePath)
                     destFile.parentFile?.mkdirs()
                     file.copyTo(destFile, overwrite = true)
-                    Log.d(TAG, "Saved persistent CSS: $relativePath to ${destFile.absolutePath}")
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to copy CSS: ${file.name}", e)
+                }
+            }
+
+            // 3b. Copy other assets persistently (fonts, js, etc)
+            val otherAssetsDir = File(bookMediaDir, "other_assets")
+            if (otherAssetsDir.exists()) otherAssetsDir.deleteRecursively()
+            otherAssetsDir.mkdirs()
+
+            otherFiles.forEach { file ->
+                try {
+                    val relativePath = file.relativeTo(tempDir).path.replace('\\', '/')
+                    val destFile = File(otherAssetsDir, relativePath)
+                    destFile.parentFile?.mkdirs()
+                    file.copyTo(destFile, overwrite = true)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to copy asset: ${file.name}", e)
                 }
             }
 
@@ -1101,18 +1119,20 @@ object EpubProcessor {
 
             val keepOriginal = !prefs.getBoolean("pref_convert_epub_system", true)
 
-            // Packaging persistent CSS files back into the stream if keepOriginal is enabled
+            // Packaging persistent CSS and other assets back into the stream if keepOriginal is enabled
             if (keepOriginal && titleId != null) {
                 val mediaDir = File(context.filesDir, "epub_media")
                 val bookMediaDir = File(mediaDir, "book_$titleId")
+                
+                // Package CSS
                 val cssDir = File(bookMediaDir, "css_files")
                 if (cssDir.exists()) {
-                    fun packageCssRecursive(dir: File) {
+                    fun packageDirRecursive(dir: File, baseDir: File, isOther: Boolean) {
                         dir.listFiles()?.forEach { file ->
                             if (file.isDirectory) {
-                                packageCssRecursive(file)
+                                packageDirRecursive(file, baseDir, isOther)
                             } else {
-                                val relPath = file.relativeTo(cssDir).path.replace('\\', '/')
+                                val relPath = file.relativeTo(baseDir).path.replace('\\', '/')
                                 try {
                                     val zipPath = if (relPath.startsWith("OEBPS/", ignoreCase = true)) relPath else "OEBPS/$relPath"
                                     val href = if (relPath.startsWith("OEBPS/", ignoreCase = true)) relPath.substring(6) else relPath
@@ -1120,17 +1140,36 @@ object EpubProcessor {
                                     zos.putNextEntry(ZipEntry(zipPath))
                                     file.inputStream().use { it.copyTo(zos) }
                                     zos.closeEntry()
-                                    Log.d(TAG, "Exported CSS back to EPUB: $zipPath")
                                     
-                                    val id = "css_" + relPath.replace("[^a-zA-Z0-9]".toRegex(), "_")
-                                    manifestItems.append("<item id=\"$id\" href=\"$href\" media-type=\"text/css\"/>\n")
+                                    val ext = file.extension.lowercase()
+                                    val mediaType = when (ext) {
+                                        "css" -> "text/css"
+                                        "js" -> "application/javascript"
+                                        "ttf" -> "application/font-sfnt"
+                                        "otf" -> "application/font-sfnt"
+                                        "woff" -> "application/font-woff"
+                                        "woff2" -> "font/woff2"
+                                        "mp3" -> "audio/mpeg"
+                                        "mp4" -> "video/mp4"
+                                        "ogg" -> "audio/ogg"
+                                        "wav" -> "audio/wav"
+                                        "xml" -> "application/xml"
+                                        else -> "application/octet-stream"
+                                    }
+                                    val id = (if (isOther) "asset_" else "css_") + relPath.replace("[^a-zA-Z0-9]".toRegex(), "_")
+                                    manifestItems.append("<item id=\"$id\" href=\"$href\" media-type=\"$mediaType\"/>\n")
                                 } catch (e: Exception) {
-                                    Log.e(TAG, "Failed block-packing CSS: $relPath", e)
+                                    Log.e(TAG, "Failed block-packing: $relPath", e)
                                 }
                             }
                         }
                     }
-                    packageCssRecursive(cssDir)
+                    packageDirRecursive(cssDir, cssDir, false)
+                    
+                    val otherAssetsDir = File(bookMediaDir, "other_assets")
+                    if (otherAssetsDir.exists()) {
+                        packageDirRecursive(otherAssetsDir, otherAssetsDir, true)
+                    }
                 }
             }
 
