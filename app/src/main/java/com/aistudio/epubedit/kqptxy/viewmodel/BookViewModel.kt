@@ -22,7 +22,6 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 
 class BookViewModel(private val app: Application, private val repository: BookRepository) : AndroidViewModel(app) {
-
     private val prefs = app.getSharedPreferences("app_settings", Context.MODE_PRIVATE)
 
     private val _currentLanguage = MutableStateFlow(prefs.getString("pref_language", "ru") ?: "ru")
@@ -118,6 +117,23 @@ class BookViewModel(private val app: Application, private val repository: BookRe
             initialValue = null
         )
 
+    init {
+        viewModelScope.launch {
+            selectedTitle.collect { title ->
+                if (title != null) {
+                    Log.d("BOOK_DEBUG", "Book title opened in details/chapters list: name = ${title.name}")
+                }
+            }
+        }
+        viewModelScope.launch {
+            editingChapter.collect { chap ->
+                if (chap != null) {
+                    Log.d("BOOK_DEBUG", "Editor Screen active chapter: id = ${chap.id}, title = ${chap.title}, wordCount = ${chap.wordCount}")
+                }
+            }
+        }
+    }
+
     fun selectTitle(titleId: Long?) {
         _selectedTitleId.value = titleId
     }
@@ -204,7 +220,12 @@ class BookViewModel(private val app: Application, private val repository: BookRe
     fun importEpub(context: Context, titleId: Long, uri: Uri, fileName: String, fileSize: Long) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val parsed = EpubProcessor.parseEpub(context, uri, titleId) ?: return@launch
+                Log.d("BOOK_DEBUG", "importEpub: Starting import of file $fileName (size: $fileSize) for titleId: $titleId")
+                val parsed = EpubProcessor.parseEpub(context, uri, titleId) ?: run {
+                    Log.d("BOOK_DEBUG", "importEpub: Failed to parse EPUB for $fileName")
+                    return@launch
+                }
+                Log.d("BOOK_DEBUG", "importEpub: Parsed successfully. Title: ${parsed.title}, Chapters count: ${parsed.chapters.size}")
                 
                 // Add SourceFile record
                 val nextFileIndex = repository.getSourceFilesForTitleOneShot(titleId).size
@@ -228,6 +249,7 @@ class BookViewModel(private val app: Application, private val repository: BookRe
                  // Append parsed chapters to Title's chapters list
                  val nextChapterIndex = repository.getChaptersForTitleOneShot(titleId).size
                  parsed.chapters.forEachIndexed { i, pc ->
+                     Log.d("BOOK_DEBUG", "importEpub: Inserting parsed chapter #$i [${pc.title}] to DB. Content length: ${pc.contentHtml.length}")
                      repository.insertChapter(
                          Chapter(
                              titleId = titleId,
@@ -250,6 +272,7 @@ class BookViewModel(private val app: Application, private val repository: BookRe
     fun convertAndImportFile(context: Context, titleId: Long, uri: Uri, fileName: String, fileSize: Long) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                Log.d("BOOK_DEBUG", "convertAndImportFile: Starting conversion/import of $fileName (size: $fileSize) for titleId: $titleId")
                 val ext = fileName.substringAfterLast(".", "").lowercase()
                 val tempEpubFile = File(context.cacheDir, "${java.util.UUID.randomUUID()}_converted.epub")
                 
@@ -268,6 +291,7 @@ class BookViewModel(private val app: Application, private val repository: BookRe
                     
                     val parsed = EpubProcessor.parseEpub(context, convertedUri, titleId)
                     if (parsed != null) {
+                        Log.d("BOOK_DEBUG", "convertAndImportFile: Converted and parsed successfully. Title: ${parsed.title}, Chapters: ${parsed.chapters.size}")
                         val nextFileIndex = repository.getSourceFilesForTitleOneShot(titleId).size
                         val sfId = repository.insertSourceFile(
                             SourceFile(
@@ -287,6 +311,7 @@ class BookViewModel(private val app: Application, private val repository: BookRe
 
                         val nextChapterIndex = repository.getChaptersForTitleOneShot(titleId).size
                         parsed.chapters.forEachIndexed { i, pc ->
+                            Log.d("BOOK_DEBUG", "convertAndImportFile: Inserting chapter #$i [${pc.title}] to DB")
                             repository.insertChapter(
                                 Chapter(
                                     titleId = titleId,

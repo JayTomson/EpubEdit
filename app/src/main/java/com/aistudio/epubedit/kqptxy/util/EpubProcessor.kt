@@ -73,32 +73,52 @@ object EpubProcessor {
         }
 
         try {
-            // 2. Scan tempDir for HTML and image assets
+            // 2. Scan tempDir for HTML, image and CSS assets
             val htmlFiles = mutableListOf<File>()
-        val imageFiles = mutableListOf<File>()
+            val imageFiles = mutableListOf<File>()
+            val cssFiles = mutableListOf<File>()
 
-        fun scanDir(dir: File) {
-            dir.listFiles()?.forEach { file ->
-                if (file.isDirectory) {
-                    scanDir(file)
-                } else {
-                    val ext = file.extension.lowercase()
-                    if (ext in listOf("html", "xhtml", "htm")) {
-                        htmlFiles.add(file)
-                    } else if (ext in listOf("jpg", "jpeg", "png", "webp", "gif")) {
-                        imageFiles.add(file)
+            fun scanDir(dir: File) {
+                dir.listFiles()?.forEach { file ->
+                    if (file.isDirectory) {
+                        scanDir(file)
+                    } else {
+                        val ext = file.extension.lowercase()
+                        if (ext in listOf("html", "xhtml", "htm")) {
+                            htmlFiles.add(file)
+                        } else if (ext in listOf("jpg", "jpeg", "png", "webp", "gif")) {
+                            imageFiles.add(file)
+                        } else if (ext == "css") {
+                            cssFiles.add(file)
+                        }
                     }
                 }
             }
-        }
-        scanDir(tempDir)
+            scanDir(tempDir)
 
-        // 3. Keep extracted images persistently in a media folder
-        val mediaDir = File(context.filesDir, "epub_media")
-        val bookMediaDir = if (titleId != null) File(mediaDir, "book_$titleId") else mediaDir
-        if (!bookMediaDir.exists()) bookMediaDir.mkdirs()
+            // 3. Keep extracted images persistently in a media folder
+            val mediaDir = File(context.filesDir, "epub_media")
+            val bookMediaDir = if (titleId != null) File(mediaDir, "book_$titleId") else mediaDir
+            if (!bookMediaDir.exists()) bookMediaDir.mkdirs()
 
-        val imageMap = mutableMapOf<String, String>() // filename -> persistent absolute path
+            // 3a. Copy and save CSS files persistently
+            val cssDir = File(bookMediaDir, "css_files")
+            if (cssDir.exists()) cssDir.deleteRecursively()
+            cssDir.mkdirs()
+
+            cssFiles.forEach { file ->
+                try {
+                    val relativePath = file.relativeTo(tempDir).path.replace('\\', '/')
+                    val destFile = File(cssDir, relativePath)
+                    destFile.parentFile?.mkdirs()
+                    file.copyTo(destFile, overwrite = true)
+                    Log.d(TAG, "Saved persistent CSS: $relativePath to ${destFile.absolutePath}")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to copy CSS: ${file.name}", e)
+                }
+            }
+
+            val imageMap = mutableMapOf<String, String>() // filename -> persistent absolute path
         imageFiles.forEach { file ->
             val destName = if (titleId != null) file.name else "media_${System.currentTimeMillis()}_${file.name}"
             val destFile = File(bookMediaDir, destName)
@@ -1079,6 +1099,41 @@ object EpubProcessor {
                 }
             }
 
+            val keepOriginal = !prefs.getBoolean("pref_convert_epub_system", true)
+
+            // Packaging persistent CSS files back into the stream if keepOriginal is enabled
+            if (keepOriginal && titleId != null) {
+                val mediaDir = File(context.filesDir, "epub_media")
+                val bookMediaDir = File(mediaDir, "book_$titleId")
+                val cssDir = File(bookMediaDir, "css_files")
+                if (cssDir.exists()) {
+                    fun packageCssRecursive(dir: File) {
+                        dir.listFiles()?.forEach { file ->
+                            if (file.isDirectory) {
+                                packageCssRecursive(file)
+                            } else {
+                                val relPath = file.relativeTo(cssDir).path.replace('\\', '/')
+                                try {
+                                    val zipPath = if (relPath.startsWith("OEBPS/", ignoreCase = true)) relPath else "OEBPS/$relPath"
+                                    val href = if (relPath.startsWith("OEBPS/", ignoreCase = true)) relPath.substring(6) else relPath
+                                    
+                                    zos.putNextEntry(ZipEntry(zipPath))
+                                    file.inputStream().use { it.copyTo(zos) }
+                                    zos.closeEntry()
+                                    Log.d(TAG, "Exported CSS back to EPUB: $zipPath")
+                                    
+                                    val id = "css_" + relPath.replace("[^a-zA-Z0-9]".toRegex(), "_")
+                                    manifestItems.append("<item id=\"$id\" href=\"$href\" media-type=\"text/css\"/>\n")
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Failed block-packing CSS: $relPath", e)
+                                }
+                            }
+                        }
+                    }
+                    packageCssRecursive(cssDir)
+                }
+            }
+
             val bookUuid = "urn:uuid:${java.util.UUID.randomUUID()}"
             val escapedTitle = escapeXml(title)
             val escapedAuthor = escapeXml(author)
@@ -1093,55 +1148,63 @@ object EpubProcessor {
                 
                 zos.putNextEntry(ZipEntry("OEBPS/$href"))
                 
-                // Smart Title check to avoid visual repetition in advanced readers
-                val cleanedHtml = cleanContentHtmlForExport(chap.contentHtml)
-                val containsTitleHeader = containsAnyTitleRepresentation(cleanedHtml, chap.title)
-                val headerTag = if (containsTitleHeader) "" else "<h2 class=\"chapter-header\">${escapeXml(chap.title)}</h2>\n"
-
-                // Standard XHTML template for high readers compatibility
-                val xhtmlContent = """
-                    <?xml version="1.0" encoding="utf-8"?>
-                    <!DOCTYPE html>
-                    <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
-                    <head>
-                        <title>${escapeXml(chap.title)}</title>
-                        <meta charset="utf-8" />
-                        <style type="text/css">
-                            body {
-                                font-family: sans-serif;
-                                line-height: 1.6;
-                                padding: 2%;
-                                margin: 0;
-                            }
-                            p {
-                                text-indent: 1.5em;
-                                margin-top: 0.2em;
-                                margin-bottom: 0.2em;
-                                text-align: justify;
-                            }
-                            .chapter-header {
-                                text-align: center;
-                                font-size: 1.5em;
-                                font-weight: bold;
-                                margin-bottom: 1.5em;
-                                margin-top: 1em;
-                            }
-                            img {
-                                max-width: 100%;
-                                height: auto;
-                                display: block;
-                                margin: 1em auto;
-                            }
-                        </style>
-                    </head>
-                    <body>
-                        $headerTag${cleanedHtml}
-                    </body>
-                    </html>
-                """.trimIndent().trim()
+                val xhtmlContentTrimmed = chap.contentHtml.trim()
+                val isFullHtml = xhtmlContentTrimmed.contains("<html", ignoreCase = true) || xhtmlContentTrimmed.contains("<body", ignoreCase = true)
                 
-                zos.write(xhtmlContent.toByteArray(Charsets.UTF_8))
-                zos.closeEntry()
+                if (keepOriginal && isFullHtml) {
+                    zos.write(xhtmlContentTrimmed.toByteArray(Charsets.UTF_8))
+                    zos.closeEntry()
+                } else {
+                    // Smart Title check to avoid visual repetition in advanced readers
+                    val cleanedHtml = cleanContentHtmlForExport(chap.contentHtml)
+                    val containsTitleHeader = containsAnyTitleRepresentation(cleanedHtml, chap.title)
+                    val headerTag = if (containsTitleHeader) "" else "<h2 class=\"chapter-header\">${escapeXml(chap.title)}</h2>\n"
+
+                    // Standard XHTML template for high readers compatibility
+                    val xhtmlContent = """
+                        <?xml version="1.0" encoding="utf-8"?>
+                        <!DOCTYPE html>
+                        <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+                        <head>
+                            <title>${escapeXml(chap.title)}</title>
+                            <meta charset="utf-8" />
+                            <style type="text/css">
+                                body {
+                                    font-family: sans-serif;
+                                    line-height: 1.6;
+                                    padding: 2%;
+                                    margin: 0;
+                                }
+                                p {
+                                    text-indent: 1.5em;
+                                    margin-top: 0.2em;
+                                    margin-bottom: 0.2em;
+                                    text-align: justify;
+                                }
+                                .chapter-header {
+                                    text-align: center;
+                                    font-size: 1.5em;
+                                    font-weight: bold;
+                                    margin-bottom: 1.5em;
+                                    margin-top: 1em;
+                                }
+                                img {
+                                    max-width: 100%;
+                                    height: auto;
+                                    display: block;
+                                    margin: 1em auto;
+                                }
+                            </style>
+                        </head>
+                        <body>
+                            $headerTag${cleanedHtml}
+                        </body>
+                        </html>
+                    """.trimIndent().trim()
+                    
+                    zos.write(xhtmlContent.toByteArray(Charsets.UTF_8))
+                    zos.closeEntry()
+                }
 
                 var safeChapTitle = escapeXml(stripHtmlTags(chap.title ?: "")).trim()
                 if (safeChapTitle.isEmpty()) {
