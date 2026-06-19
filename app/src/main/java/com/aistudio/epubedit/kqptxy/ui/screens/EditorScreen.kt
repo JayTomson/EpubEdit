@@ -190,7 +190,12 @@ fun serializeEditorBlocksToHtml(
         when (block) {
             is EditorBlock.Text -> {
                 val latestText = blockTextFieldValues[block.id]?.annotatedString ?: com.aistudio.epubedit.kqptxy.util.RichTextUtil.htmlToAnnotatedString(block.content)
-                val valHtml = com.aistudio.epubedit.kqptxy.util.RichTextUtil.annotatedStringToHtml(latestText)
+                val originalAnn = com.aistudio.epubedit.kqptxy.util.RichTextUtil.htmlToAnnotatedString(block.content)
+                val valHtml = if (latestText == originalAnn) {
+                    block.content
+                } else {
+                    com.aistudio.epubedit.kqptxy.util.RichTextUtil.annotatedStringToHtml(latestText)
+                }
                 if (valHtml.isNotEmpty() && valHtml != "<p></p>") {
                     sb.append(valHtml).append("\n")
                 }
@@ -573,44 +578,19 @@ fun EditorScreen(
                 val endContentIdx = endMatch?.range?.first ?: htmlText.length
                 
                 if (startContentIdx <= endContentIdx) {
-                    val headRegex = Regex("<head(?:\\s+[^>]*)?>.*?</head>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-                    val titleRegex = Regex("<title(?:\\s+[^>]*)?>.*?</title>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-                    val metaRegex = Regex("<meta(?:\\s+[^>]*)?/?>", RegexOption.IGNORE_CASE)
-                    val linkRegex = Regex("<link(?:\\s+[^>]*)?/?>", RegexOption.IGNORE_CASE)
-                    
                     htmlPrefix = htmlText.substring(0, startContentIdx)
-                        .replace(headRegex, "")
-                        .replace(titleRegex, "")
-                        .replace(metaRegex, "")
-                        .replace(linkRegex, "")
-                        .plus("\n")
                     bodyContent = htmlText.substring(startContentIdx, endContentIdx)
-                    htmlSuffix = if (endMatch != null) "\n" + htmlText.substring(endContentIdx) else ""
+                    htmlSuffix = if (endMatch != null) htmlText.substring(endContentIdx) else ""
                     
                     localCursor = htmlCursor - startContentIdx
                     if (localCursor < 0) localCursor = 0
                     if (localCursor > bodyContent.length) localCursor = bodyContent.length
-                } else {
-                    htmlPrefix = ""
-                    htmlSuffix = ""
                 }
             } else {
-                htmlPrefix = ""
-                htmlSuffix = ""
-                val headRegex = Regex("<head(?:\\s+[^>]*)?>.*?</head>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-                val titleRegex = Regex("<title(?:\\s+[^>]*)?>.*?</title>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-                val metaRegex = Regex("<meta(?:\\s+[^>]*)?/?>", RegexOption.IGNORE_CASE)
-                val linkRegex = Regex("<link(?:\\s+[^>]*)?/?>", RegexOption.IGNORE_CASE)
-                bodyContent = htmlText.replace(headRegex, "")
-                    .replace(titleRegex, "")
-                    .replace(metaRegex, "")
-                    .replace(linkRegex, "")
-                
-                // Approximate cursor mapping since head is removed
-                val removedLen = htmlText.length - bodyContent.length
-                localCursor = htmlCursor - removedLen
-                if (localCursor < 0) localCursor = 0
-                if (localCursor > bodyContent.length) localCursor = bodyContent.length
+                // If the user didn't type <body>, they are editing the body content.
+                // Do not clear the existing htmlPrefix or htmlSuffix! Maintain the envelope.
+                bodyContent = htmlText
+                localCursor = htmlCursor
             }
             
             val parsed = parseHtmlToEditorBlocks(bodyContent, context, currentChapter.titleId)
@@ -926,7 +906,10 @@ fun EditorScreen(
     }
 
     BackHandler {
-        if (chapterTitle.trim() != currentChapter.title || currentContentText().trim() != currentChapter.contentHtml.trim()) {
+        val currentContent = currentContentText().trim()
+        val originalContent = currentChapter.displayHtml?.trim() ?: extractBodyForDisplay(currentChapter.contentHtml).trim()
+        
+        if (chapterTitle.trim() != currentChapter.title || currentContent != originalContent) {
             showUnsavedChangesDialog = true
         } else {
             onBackClick()

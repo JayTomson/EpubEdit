@@ -460,8 +460,9 @@ object RichTextUtil {
 
     class HtmlSyntaxTransformation : androidx.compose.ui.text.input.VisualTransformation {
         override fun filter(text: AnnotatedString): androidx.compose.ui.text.input.TransformedText {
-            // Optimization for very large files to prevent UI lag/crashes
-            if (text.length > 30000) {
+            // Disable complex syntax highlighting for very large text to prevent UI lag/crashes when typing.
+            // Even simple Regexes can block the main UI thread during Compose recomposition of TextFieldValue.
+            if (text.length > 2000) {
                 return androidx.compose.ui.text.input.TransformedText(
                     text,
                     androidx.compose.ui.text.input.OffsetMapping.Identity
@@ -477,57 +478,14 @@ object RichTextUtil {
             val tagColor = androidx.compose.ui.graphics.Color(0xFF569CD6) // Blue
             val attrColor = androidx.compose.ui.graphics.Color(0xFF9CDCFE) // Cyan
             val valueColor = androidx.compose.ui.graphics.Color(0xFFCE9178) // Orange
-            val commentColor = androidx.compose.ui.graphics.Color(0xFF6A9955) // Green
-            val bracketColor = androidx.compose.ui.graphics.Color(0xFF808080) // Gray
-            val entityColor = androidx.compose.ui.graphics.Color(0xFFD7BA7D) // Gold
+            val jsonOrNoColor = androidx.compose.ui.graphics.Color.Unspecified
 
             return buildAnnotatedString {
                 append(text)
                 
-                // Comments
-                Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL).findAll(text).forEach {
-                    addStyle(SpanStyle(color = commentColor), it.range.first, it.range.last + 1)
-                }
-                
-                // XML/Doctype
-                Regex("<\\?.*?\\?>|<!.*?>").findAll(text).forEach {
-                    addStyle(SpanStyle(color = tagColor), it.range.first, it.range.last + 1)
-                }
-
-                // Tags
-                Regex("<[^>]*>").findAll(text).forEach { result ->
-                    val tagRange = result.range
-                    val tagContent = result.value
-                    
-                    if (!tagContent.startsWith("<!--")) {
-                        // All brackets
-                        addStyle(SpanStyle(color = bracketColor), tagRange.first, tagRange.first + 1)
-                        addStyle(SpanStyle(color = bracketColor), tagRange.last, tagRange.last + 1)
-                        
-                        // Tag Name
-                        val nameMatch = Regex("<(/?([a-zA-Z0-9:-]+))").find(tagContent)
-                        if (nameMatch != null) {
-                            val nameRange = nameMatch.groups[1]!!.range
-                            addStyle(SpanStyle(color = tagColor), tagRange.first + nameRange.first, tagRange.first + nameRange.last + 1)
-                        }
-                        
-                        // Attributes
-                        Regex("([a-zA-Z0-9:-]+)=").findAll(tagContent).forEach { attr ->
-                            val attrRange = attr.groups[1]!!.range
-                            addStyle(SpanStyle(color = attrColor), tagRange.first + attrRange.first, tagRange.first + attrRange.last + 1)
-                        }
-                        
-                        // Values
-                        Regex("(\"[^\"]*\"|'[^']*')").findAll(tagContent).forEach { valMatch ->
-                            val valRange = valMatch.range
-                            addStyle(SpanStyle(color = valueColor), tagRange.first + valRange.first, tagRange.first + valRange.last + 1)
-                        }
-                    }
-                }
-                
-                // Entities
-                Regex("&[a-zA-Z0-9#]+;").findAll(text).forEach {
-                    addStyle(SpanStyle(color = entityColor), it.range.first, it.range.last + 1)
+                // Very fast minimal highlighting for small strings only
+                Regex("<(/?[a-zA-Z0-9:-]+)").findAll(text).forEach { result ->
+                    addStyle(SpanStyle(color = tagColor), result.range.first, result.range.last + 1)
                 }
             }
         }

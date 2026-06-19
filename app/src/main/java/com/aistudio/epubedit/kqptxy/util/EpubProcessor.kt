@@ -536,6 +536,8 @@ object EpubProcessor {
 
         if (ncxNavPoints.isNotEmpty()) {
             // NCX splitting strategy (highly accurate for splitting single giant HTML files)
+            val fileIndexCursor = mutableMapOf<String, Int>()
+
             ncxNavPoints.forEachIndexed { idx, item ->
                 try {
                     val decodedFileHref = java.net.URLDecoder.decode(item.fileHref, "UTF-8")
@@ -543,15 +545,17 @@ object EpubProcessor {
                     if (chapterFile.exists()) {
                         val fullHtml = chapterFile.readText(Charsets.UTF_8)
 
+                        val lastCursor = fileIndexCursor[decodedFileHref] ?: 0
                         val startIdx = if (item.anchor != null) {
-                            findAnchorPositionInHtml(fullHtml, item.anchor)
+                            val pos = findAnchorPositionInHtml(fullHtml, item.anchor)
+                            if (pos != -1) pos else lastCursor
                         } else {
-                            0
+                            lastCursor
                         }
 
                         // Robust lookahead parsing: find the next anchor anywhere in the SAME file in any subsequent navPoints
                         var endIdx = -1
-                        val finalStartIdx = if (startIdx == -1) 0 else startIdx
+                        val finalStartIdx = startIdx
 
                         for (nextIdx in (idx + 1) until ncxNavPoints.size) {
                             val nextItem = ncxNavPoints[nextIdx]
@@ -566,6 +570,9 @@ object EpubProcessor {
 
                         val finalEndIdx = if (endIdx == -1 || endIdx <= finalStartIdx) fullHtml.length else endIdx
                         val htmlSegment = fullHtml.substring(finalStartIdx, finalEndIdx)
+                        
+                        fileIndexCursor[decodedFileHref] = finalEndIdx
+                        
                         val cleanedHtmlSegment = cleanChapterHtml(htmlSegment, keepOriginal)
 
                         val relPath = try { chapterFile.relativeTo(tempDir).path.replace('\\', '/') } catch(e: Exception) { null }
