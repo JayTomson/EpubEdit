@@ -43,6 +43,9 @@ import com.aistudio.epubedit.kqptxy.util.EpubProcessor
 import com.aistudio.epubedit.kqptxy.util.Loc
 import com.aistudio.epubedit.kqptxy.viewmodel.BookViewModel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import java.io.File
 import java.io.FileOutputStream
 
@@ -369,7 +372,7 @@ fun TextBlockItem(
     
     LaunchedEffect(blockTextFieldValues[block.id]) {
         val parentVal = blockTextFieldValues[block.id]
-        if (parentVal != null && parentVal != tfValue) {
+        if (parentVal != null && parentVal.annotatedString != tfValue.annotatedString) {
             tfValue = parentVal
         }
     }
@@ -437,7 +440,8 @@ fun EditorScreen(
 
     val currentChapter = chapter!!
 
-    var chapterTitle by remember(currentChapter) { mutableStateOf(currentChapter.title) }
+    var initializedChapterId by remember { mutableStateOf<Long?>(null) }
+    var chapterTitle by remember(chapterId) { mutableStateOf("") }
     
     // Tracks editing mode (false = Visual/Plain Text blocks, true = Raw HTML)
     var isHtmlMode by remember { mutableStateOf(false) }
@@ -451,25 +455,32 @@ fun EditorScreen(
     var activeBlockIndex by remember { mutableStateOf<Int?>(null) }
     
     // HTML Text editor state and Image delete states
-    var htmlTextState by remember(currentChapter) {
-        val raw = currentChapter.contentHtml
-        mutableStateOf(TextFieldValue(if (raw == "<p>Введите...</p>" || raw.contains("Введите текст вашей новой главы")) "" else raw))
+    var htmlTextState by remember(chapterId) {
+        mutableStateOf(TextFieldValue(""))
     }
     
     var imageToDeleteIndex by remember { mutableStateOf<Int?>(null) }
     var showUnsavedChangesDialog by remember { mutableStateOf(false) }
 
     // Load initial blocks
-    LaunchedEffect(currentChapter) {
-        val parsed = parseHtmlToEditorBlocks(currentChapter.contentHtml, context, currentChapter.titleId)
-        editorBlocks.clear()
-        editorBlocks.addAll(parsed)
-        blockTextFieldValues.clear()
-        parsed.forEach { b ->
-            if (b is EditorBlock.Text) {
-                val ann = com.aistudio.epubedit.kqptxy.util.RichTextUtil.htmlToAnnotatedString(b.content)
-                blockTextFieldValues[b.id] = TextFieldValue(annotatedString = ann)
+    LaunchedEffect(chapterId, currentChapter) {
+        if (initializedChapterId != chapterId) {
+            initializedChapterId = chapterId
+            val parsed = withContext(Dispatchers.IO) {
+                parseHtmlToEditorBlocks(currentChapter.contentHtml, context, currentChapter.titleId)
             }
+            editorBlocks.clear()
+            editorBlocks.addAll(parsed)
+            blockTextFieldValues.clear()
+            parsed.forEach { b ->
+                if (b is EditorBlock.Text) {
+                    val ann = com.aistudio.epubedit.kqptxy.util.RichTextUtil.htmlToAnnotatedString(b.content)
+                    blockTextFieldValues[b.id] = TextFieldValue(annotatedString = ann)
+                }
+            }
+            val raw = currentChapter.contentHtml
+            htmlTextState = TextFieldValue(if (raw == "<p>Введите...</p>" || raw.contains("Введите текст вашей новой главы")) "" else raw)
+            chapterTitle = currentChapter.title
         }
     }
 
@@ -505,8 +516,9 @@ fun EditorScreen(
                     }
                 }
                 
-                // Scroll Visual list to active block
+                // Scroll Visual list to active block with delay to allow rendering
                 coroutineScope.launch {
+                    delay(100L)
                     try {
                         lazyListState.animateScrollToItem(blockIdx)
                     } catch (e: Exception) {
@@ -531,11 +543,15 @@ fun EditorScreen(
                     
                     var accumulatedPlain = 0
                     for (i in 0 until activeIdx) {
-                        val b = editorBlocks[i]
-                        if (b is EditorBlock.Text) {
-                            val tfVal = blockTextFieldValues[b.id]
-                            val tLen = tfVal?.text?.length ?: b.content.length
-                            accumulatedPlain += tLen
+                        when (val b = editorBlocks[i]) {
+                            is EditorBlock.Text -> {
+                                val tfVal = blockTextFieldValues[b.id]
+                                val tLen = tfVal?.text?.length ?: b.content.length
+                                accumulatedPlain += tLen + 1 // +1 for newline between blocks
+                            }
+                            is EditorBlock.Image -> {
+                                accumulatedPlain += 1 // image block tag itself has 0 plain count but \n adds 1 plain char
+                            }
                         }
                     }
                     accumulatedPlain += blockCursor
@@ -557,6 +573,17 @@ fun EditorScreen(
         if (isHtmlMode) htmlTextState.text else serializeEditorBlocksToHtml(editorBlocks, blockTextFieldValues)
     }
 
+    val totalWords by remember {
+        derivedStateOf {
+            val text = if (isHtmlMode) {
+                htmlTextState.text
+            } else {
+                serializeEditorBlocksToHtml(editorBlocks, blockTextFieldValues)
+            }
+            WordStatsHelper.countWords(text)
+        }
+    }
+
     val applyFormatAction = { tagOpen: String, tagClose: String ->
         if (isHtmlMode) {
             val tf = htmlTextState
@@ -575,30 +602,7 @@ fun EditorScreen(
             }
             htmlTextState = TextFieldValue(newText, androidx.compose.ui.text.TextRange(newCursorIdx))
         } else {
-            // Apply formatting to currently focused Visual Text block
-            val focusedIdx = activeBlockIndex ?: 0
-            if (focusedIdx >= 0 && focusedIdx < editorBlocks.size) {
-                val block = editorBlocks[focusedIdx]
-                if (block is EditorBlock.Text) {
-                    val tf = blockTextFieldValues[block.id] ?: TextFieldValue(block.content)
-                    val text = tf.text
-                    val selection = tf.selection
-                    val newText: String
-                    val newCursorIdx: Int
-                    if (!selection.collapsed) {
-                        val selectedText = text.substring(selection.start, selection.end)
-                        newText = text.substring(0, selection.start) + tagOpen + selectedText + tagClose + text.substring(selection.end)
-                        newCursorIdx = selection.start + tagOpen.length + selectedText.length + tagClose.length
-                    } else {
-                        val cursor = selection.start
-                        newText = text.substring(0, cursor) + tagOpen + tagClose + text.substring(cursor)
-                        newCursorIdx = cursor + tagOpen.length
-                    }
-                    val updatedTf = TextFieldValue(newText, androidx.compose.ui.text.TextRange(newCursorIdx))
-                    blockTextFieldValues[block.id] = updatedTf
-                    editorBlocks[focusedIdx] = EditorBlock.Text(newText, block.id)
-                }
-            }
+            Toast.makeText(context, Loc.t("formatting_only_html", lang), Toast.LENGTH_LONG).show()
         }
     }
 
@@ -821,32 +825,27 @@ fun EditorScreen(
                             modifier = Modifier.weight(1f)
                         ) {
                             IconButton(
-                                onClick = { applyFormatAction("<b>", "</b>") },
-                                enabled = isHtmlMode
+                                onClick = { applyFormatAction("<b>", "</b>") }
                             ) {
                                 Icon(Icons.Default.FormatBold, Loc.t("bold", lang))
                             }
                             IconButton(
-                                onClick = { applyFormatAction("<i>", "</i>") },
-                                enabled = isHtmlMode
+                                onClick = { applyFormatAction("<i>", "</i>") }
                             ) {
                                 Icon(Icons.Default.FormatItalic, Loc.t("italic", lang))
                             }
                             IconButton(
-                                onClick = { applyFormatAction("<u>", "</u>") },
-                                enabled = isHtmlMode
+                                onClick = { applyFormatAction("<u>", "</u>") }
                             ) {
                                 Icon(Icons.Default.FormatUnderlined, Loc.t("underlined", lang))
                             }
                             IconButton(
-                                onClick = { applyFormatAction("<s>", "</s>") },
-                                enabled = isHtmlMode
+                                onClick = { applyFormatAction("<s>", "</s>") }
                             ) {
                                 Icon(Icons.Default.FormatStrikethrough, Loc.t("strikethrough", lang))
                             }
                             IconButton(
-                                onClick = { applyFormatAction("<p>", "</p>") },
-                                enabled = isHtmlMode
+                                onClick = { applyFormatAction("<p>", "</p>") }
                             ) {
                                 Icon(Icons.Default.Segment, Loc.t("paragraph", lang))
                             }
@@ -867,7 +866,7 @@ fun EditorScreen(
                                     }
                                 }
                                 if (!isCursorOnEmptyLine(tf)) {
-                                    Toast.makeText(context, "Иллюстрацию можно вставить только на пустую строку!", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(context, Loc.t("illustration_empty_line_only", lang), Toast.LENGTH_LONG).show()
                                 } else {
                                     imagePickerLauncher.launch("image/*")
                                 }
@@ -978,7 +977,6 @@ fun EditorScreen(
                     fontWeight = FontWeight.Bold, 
                     color = if (isHtmlMode) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.secondary
                 )
-                val totalWords = WordStatsHelper.countWords(currentContentText())
                 Text(Loc.t("words", lang) + ": $totalWords", fontSize = 12.sp, color = MaterialTheme.colorScheme.outline, fontWeight = FontWeight.Medium)
             }
             Spacer(modifier = Modifier.height(6.dp))
@@ -1037,7 +1035,10 @@ fun EditorScreen(
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        itemsIndexed(editorBlocks) { index, block ->
+                        itemsIndexed(
+                            items = editorBlocks,
+                            key = { _, block -> block.id }
+                        ) { index, block ->
                             when (block) {
                                 is EditorBlock.Text -> {
                                     TextBlockItem(
@@ -1091,13 +1092,13 @@ fun EditorScreen(
                                             ) {
                                                 Icon(
                                                     imageVector = Icons.Default.BrokenImage,
-                                                    contentDescription = "Ошибка загрузки изображения",
+                                                    contentDescription = Loc.t("image_load_error", lang),
                                                     tint = MaterialTheme.colorScheme.error,
                                                     modifier = Modifier.size(48.dp)
                                                 )
                                                 Spacer(modifier = Modifier.height(8.dp))
                                                 Text(
-                                                    "Изображение не найдено локально",
+                                                    Loc.t("image_not_found_local", lang),
                                                     color = MaterialTheme.colorScheme.error,
                                                     fontSize = 13.sp,
                                                     fontWeight = FontWeight.SemiBold
@@ -1128,7 +1129,7 @@ fun EditorScreen(
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Default.Delete,
-                                                contentDescription = "Удалить иллюстрацию",
+                                                contentDescription = Loc.t("delete_illustration_cd", lang),
                                                 tint = MaterialTheme.colorScheme.onErrorContainer,
                                                 modifier = Modifier.size(20.dp)
                                             )
@@ -1147,7 +1148,7 @@ fun EditorScreen(
                                         ) {
                                             val shortName = File(block.fileName).name
                                             Text(
-                                                "Файл: $shortName",
+                                                Loc.t("file_label", lang) + shortName,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 fontSize = 11.sp,
                                                 fontWeight = FontWeight.Medium

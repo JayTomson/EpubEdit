@@ -119,7 +119,7 @@ class BookViewModel(private val app: Application, private val repository: BookRe
     }
 
     fun addTitle(name: String) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val title = Title(
                 name = name,
                 author = "",
@@ -180,7 +180,7 @@ class BookViewModel(private val app: Application, private val repository: BookRe
         coverImage: String?,
         outputFileName: String
     ) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val existing = repository.getTitleByIdOneShot(titleId) ?: return@launch
             val updated = existing.copy(
                 name = name,
@@ -304,7 +304,7 @@ class BookViewModel(private val app: Application, private val repository: BookRe
     }
 
     fun renameSourceFile(file: SourceFile, newName: String) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             repository.updateSourceFile(file.copy(fileName = newName))
         }
     }
@@ -335,7 +335,7 @@ class BookViewModel(private val app: Application, private val repository: BookRe
     }
 
     fun addManualChapter(titleId: Long, title: String) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val chs = repository.getChaptersForTitleOneShot(titleId)
             val newIdx = chs.size
             repository.insertChapter(
@@ -352,13 +352,13 @@ class BookViewModel(private val app: Application, private val repository: BookRe
     }
 
     fun updateChapterContent(chapterId: Long, title: String, contentHtml: String, previewImagePath: String?) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val current = repository.getChapterByIdOneShot(chapterId) ?: return@launch
             val words = WordStatsHelper.countWords(contentHtml)
             val chars = WordStatsHelper.countCharacters(contentHtml)
             
             val updated = current.copy(
-                title = title.ifBlank { "Без названия" },
+                title = title.ifBlank { "Untitled" },
                 contentHtml = contentHtml,
                 previewImagePath = previewImagePath,
                 wordCount = words,

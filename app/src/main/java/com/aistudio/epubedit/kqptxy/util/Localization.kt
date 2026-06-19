@@ -101,7 +101,13 @@ object Loc {
         "theme_light" to "Светлая",
         "theme_dark" to "Темная",
         "theme_amoled" to "AMOLED",
-        "chapter_illustration" to "Иллюстрация главы"
+        "chapter_illustration" to "Иллюстрация главы",
+        "formatting_only_html" to "Форматирование доступно при переключении на вкладку HTML-кода главы.",
+        "illustration_empty_line_only" to "Иллюстрацию можно вставить только на пустую строку!",
+        "image_not_found_local" to "Изображение не найдено локально",
+        "file_label" to "Файл: ",
+        "image_load_error" to "Ошибка загрузки изображения",
+        "delete_illustration_cd" to "Удалить иллюстрацию"
     )
 
     private val en = mapOf(
@@ -204,7 +210,13 @@ object Loc {
         "theme_light" to "Light",
         "theme_dark" to "Dark",
         "theme_amoled" to "AMOLED",
-        "chapter_illustration" to "Chapter illustration"
+        "chapter_illustration" to "Chapter illustration",
+        "formatting_only_html" to "Formatting is available by switching to the HTML code tab.",
+        "illustration_empty_line_only" to "Illustrations can only be inserted on an empty line!",
+        "image_not_found_local" to "Image not found locally",
+        "file_label" to "File: ",
+        "image_load_error" to "Image loading error",
+        "delete_illustration_cd" to "Delete illustration"
     )
 
     fun t(key: String, lang: String): String {
