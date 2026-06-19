@@ -1,0 +1,5 @@
+# Keep directory, but ignore image files except this one
+*.png
+*.jpg
+*.jpeg
+!/.gitignore
