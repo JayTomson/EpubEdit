@@ -16,6 +16,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -260,6 +262,153 @@ fun handleHtmlAutoClose(oldState: TextFieldValue, newState: TextFieldValue): Tex
     return newState
 }
 
+fun findPlainOffsetFromHtmlOffset(html: String, targetHtmlOffset: Int): Int {
+    var plainCount = 0
+    var inTag = false
+    var htmlIdx = 0
+    val limit = targetHtmlOffset.coerceAtMost(html.length)
+    
+    while (htmlIdx < limit) {
+        val c = html[htmlIdx]
+        if (c == '<') {
+            inTag = true
+            htmlIdx++
+        } else if (c == '>') {
+            inTag = false
+            htmlIdx++
+        } else if (inTag) {
+            htmlIdx++
+        } else {
+            if (c == '&') {
+                val semiIdx = html.indexOf(';', htmlIdx)
+                if (semiIdx != -1 && semiIdx - htmlIdx in 2..7) {
+                    plainCount++
+                    htmlIdx = semiIdx + 1
+                    continue
+                }
+            }
+            plainCount++
+            htmlIdx++
+        }
+    }
+    return plainCount
+}
+
+fun findHtmlOffsetFromPlainOffset(html: String, targetPlainOffset: Int): Int {
+    var plainCount = 0
+    var inTag = false
+    var htmlIdx = 0
+    val len = html.length
+    
+    while (htmlIdx < len && plainCount < targetPlainOffset) {
+        val c = html[htmlIdx]
+        if (c == '<') {
+            inTag = true
+            htmlIdx++
+        } else if (c == '>') {
+            inTag = false
+            htmlIdx++
+        } else if (inTag) {
+            htmlIdx++
+        } else {
+            if (c == '&') {
+                val semiIdx = html.indexOf(';', htmlIdx)
+                if (semiIdx != -1 && semiIdx - htmlIdx in 2..7) {
+                    plainCount++
+                    htmlIdx = semiIdx + 1
+                    continue
+                }
+            }
+            plainCount++
+            htmlIdx++
+        }
+    }
+    return htmlIdx
+}
+
+fun mapPlainOffsetToBlock(
+    blocks: List<EditorBlock>,
+    blockTextFieldValues: Map<String, TextFieldValue>,
+    targetPlainOffset: Int
+): Pair<Int, Int>? {
+    var accumulatedPlain = 0
+    for ((index, block) in blocks.withIndex()) {
+        if (block is EditorBlock.Text) {
+            val tf = blockTextFieldValues[block.id] ?: TextFieldValue(annotatedString = com.aistudio.epubedit.kqptxy.util.RichTextUtil.htmlToAnnotatedString(block.content))
+            val textLen = tf.text.length
+            
+            if (targetPlainOffset <= accumulatedPlain + textLen) {
+                val localOffset = (targetPlainOffset - accumulatedPlain).coerceIn(0, textLen)
+                return Pair(index, localOffset)
+            }
+            accumulatedPlain += textLen
+        }
+    }
+    
+    val lastTextIdx = blocks.indexOfLast { it is EditorBlock.Text }
+    if (lastTextIdx != -1) {
+        val block = blocks[lastTextIdx] as EditorBlock.Text
+        val tf = blockTextFieldValues[block.id]
+        val textLen = tf?.text?.length ?: 0
+        return Pair(lastTextIdx, textLen)
+    }
+    return null
+}
+
+@Composable
+fun TextBlockItem(
+    block: EditorBlock.Text,
+    index: Int,
+    lang: String,
+    blockTextFieldValues: Map<String, TextFieldValue>,
+    onFocusGain: () -> Unit,
+    onValueChange: (TextFieldValue) -> Unit
+) {
+    val initialTfValue = blockTextFieldValues[block.id] ?: TextFieldValue(annotatedString = com.aistudio.epubedit.kqptxy.util.RichTextUtil.htmlToAnnotatedString(block.content))
+    var tfValue by remember(block.id) { mutableStateOf(initialTfValue) }
+    
+    LaunchedEffect(blockTextFieldValues[block.id]) {
+        val parentVal = blockTextFieldValues[block.id]
+        if (parentVal != null && parentVal != tfValue) {
+            tfValue = parentVal
+        }
+    }
+    
+    OutlinedTextField(
+        value = tfValue,
+        onValueChange = { newVal ->
+            tfValue = newVal
+            onValueChange(newVal)
+        },
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { focusState ->
+                if (focusState.isFocused) {
+                    onFocusGain()
+                }
+            },
+        textStyle = TextStyle(
+            fontFamily = FontFamily.SansSerif,
+            fontSize = 16.sp,
+            color = MaterialTheme.colorScheme.onSurface,
+            lineHeight = 24.sp
+        ),
+        colors = TextFieldDefaults.colors(
+            focusedContainerColor = Color.Transparent,
+            unfocusedContainerColor = Color.Transparent,
+            disabledContainerColor = Color.Transparent,
+            focusedIndicatorColor = Color.Transparent,
+            unfocusedIndicatorColor = Color.Transparent
+        ),
+        placeholder = {
+            Text(
+                Loc.t("enter_text_here", lang),
+                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
+            )
+        }
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun EditorScreen(
@@ -268,6 +417,9 @@ fun EditorScreen(
     onBackClick: () -> Unit
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val lazyListState = rememberLazyListState()
+
     LaunchedEffect(chapterId) {
         viewModel.selectEditingChapter(chapterId)
     }
@@ -325,7 +477,10 @@ fun EditorScreen(
     val toggleMode = {
         if (isHtmlMode) {
             // HTML to Visual Blocks
-            val parsed = parseHtmlToEditorBlocks(htmlTextState.text, context, currentChapter.titleId)
+            val htmlText = htmlTextState.text
+            val htmlCursor = htmlTextState.selection.start
+            
+            val parsed = parseHtmlToEditorBlocks(htmlText, context, currentChapter.titleId)
             editorBlocks.clear()
             editorBlocks.addAll(parsed)
             blockTextFieldValues.clear()
@@ -335,11 +490,65 @@ fun EditorScreen(
                     blockTextFieldValues[b.id] = TextFieldValue(annotatedString = ann)
                 }
             }
+            
+            // Map cursor from HTML to Visual
+            val plainOffset = findPlainOffsetFromHtmlOffset(htmlText, htmlCursor)
+            val blockMapping = mapPlainOffsetToBlock(parsed, blockTextFieldValues, plainOffset)
+            if (blockMapping != null) {
+                val (blockIdx, localOffset) = blockMapping
+                activeBlockIndex = blockIdx
+                val block = parsed[blockIdx]
+                if (block is EditorBlock.Text) {
+                    val currentTf = blockTextFieldValues[block.id]
+                    if (currentTf != null) {
+                        blockTextFieldValues[block.id] = currentTf.copy(selection = androidx.compose.ui.text.TextRange(localOffset))
+                    }
+                }
+                
+                // Scroll Visual list to active block
+                coroutineScope.launch {
+                    try {
+                        lazyListState.animateScrollToItem(blockIdx)
+                    } catch (e: Exception) {
+                        try {
+                            lazyListState.scrollToItem(blockIdx)
+                        } catch (ex: Exception) {}
+                    }
+                }
+            }
+            
             isHtmlMode = false
         } else {
             // Visual Blocks to HTML
+            val activeIdx = activeBlockIndex
             val convertedHtml = serializeEditorBlocksToHtml(editorBlocks, blockTextFieldValues)
-            htmlTextState = TextFieldValue(convertedHtml, androidx.compose.ui.text.TextRange(convertedHtml.length))
+            
+            if (activeIdx != null && activeIdx in editorBlocks.indices) {
+                val activeBlock = editorBlocks[activeIdx]
+                if (activeBlock is EditorBlock.Text) {
+                    val tf = blockTextFieldValues[activeBlock.id] ?: TextFieldValue("")
+                    val blockCursor = tf.selection.start
+                    
+                    var accumulatedPlain = 0
+                    for (i in 0 until activeIdx) {
+                        val b = editorBlocks[i]
+                        if (b is EditorBlock.Text) {
+                            val tfVal = blockTextFieldValues[b.id]
+                            val tLen = tfVal?.text?.length ?: b.content.length
+                            accumulatedPlain += tLen
+                        }
+                    }
+                    accumulatedPlain += blockCursor
+                    
+                    val htmlOffset = findHtmlOffsetFromPlainOffset(convertedHtml, accumulatedPlain)
+                    htmlTextState = TextFieldValue(convertedHtml, androidx.compose.ui.text.TextRange(htmlOffset))
+                } else {
+                    htmlTextState = TextFieldValue(convertedHtml, androidx.compose.ui.text.TextRange(convertedHtml.length))
+                }
+            } else {
+                htmlTextState = TextFieldValue(convertedHtml, androidx.compose.ui.text.TextRange(convertedHtml.length))
+            }
+            
             isHtmlMode = true
         }
     }
@@ -824,47 +1033,24 @@ fun EditorScreen(
                 } else {
                     // Visual Blocks List rendering text fields and images inline
                     LazyColumn(
+                        state = lazyListState,
                         modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         itemsIndexed(editorBlocks) { index, block ->
                             when (block) {
                                 is EditorBlock.Text -> {
-                                    val tfValue = blockTextFieldValues.getOrPut(block.id) {
-                                        val ann = com.aistudio.epubedit.kqptxy.util.RichTextUtil.htmlToAnnotatedString(block.content)
-                                        TextFieldValue(annotatedString = ann)
-                                    }
-                                    OutlinedTextField(
-                                        value = tfValue,
+                                    TextBlockItem(
+                                        block = block,
+                                        index = index,
+                                        lang = lang,
+                                        blockTextFieldValues = blockTextFieldValues,
+                                        onFocusGain = {
+                                            activeBlockIndex = index
+                                        },
                                         onValueChange = { newVal ->
                                             blockTextFieldValues[block.id] = newVal
                                             editorBlocks[index] = EditorBlock.Text(com.aistudio.epubedit.kqptxy.util.RichTextUtil.annotatedStringToHtml(newVal.annotatedString), block.id)
-                                        },
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .onFocusChanged { focusState ->
-                                                if (focusState.isFocused) {
-                                                    activeBlockIndex = index
-                                                }
-                                            },
-                                        textStyle = TextStyle(
-                                            fontFamily = FontFamily.SansSerif,
-                                            fontSize = 16.sp,
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                            lineHeight = 24.sp
-                                        ),
-                                        colors = TextFieldDefaults.colors(
-                                            focusedContainerColor = Color.Transparent,
-                                            unfocusedContainerColor = Color.Transparent,
-                                            disabledContainerColor = Color.Transparent,
-                                            focusedIndicatorColor = Color.Transparent,
-                                            unfocusedIndicatorColor = Color.Transparent
-                                        ),
-                                        placeholder = {
-                                            Text(
-                                                Loc.t("enter_text_here", lang),
-                                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
-                                            )
                                         }
                                     )
                                 }
