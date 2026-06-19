@@ -132,4 +132,57 @@ object RichTextUtil {
     private fun escapeHtml(text: String): String {
         return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     }
+
+    fun adjustSpans(oldApp: AnnotatedString, newText: String): AnnotatedString {
+        val oldText = oldApp.text
+        if (oldText == newText) {
+            return oldApp
+        }
+        
+        var prefixLen = 0
+        while (prefixLen < oldText.length && prefixLen < newText.length && oldText[prefixLen] == newText[prefixLen]) {
+            prefixLen++
+        }
+        
+        var suffixLen = 0
+        while (suffixLen < (oldText.length - prefixLen) && suffixLen < (newText.length - prefixLen) &&
+               oldText[oldText.length - 1 - suffixLen] == newText[newText.length - 1 - suffixLen]) {
+            suffixLen++
+        }
+        
+        val deletedLength = oldText.length - prefixLen - suffixLen
+        val insertedLength = newText.length - prefixLen - suffixLen
+        val editStart = prefixLen
+        
+        return buildAnnotatedString {
+            append(newText)
+            oldApp.spanStyles.forEach { range ->
+                val start = range.start
+                val end = range.end
+                
+                val newStart: Int
+                val newEnd: Int
+                
+                if (start < editStart) {
+                    newStart = start
+                } else if (start >= editStart + deletedLength) {
+                    newStart = start - deletedLength + insertedLength
+                } else {
+                    newStart = editStart
+                }
+                
+                if (end <= editStart) {
+                    newEnd = end
+                } else if (end >= editStart + deletedLength) {
+                    newEnd = end - deletedLength + insertedLength
+                } else {
+                    newEnd = editStart
+                }
+                
+                if (newStart < newEnd) {
+                    addStyle(range.item, newStart, newEnd)
+                }
+            }
+        }
+    }
 }

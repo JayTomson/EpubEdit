@@ -380,8 +380,11 @@ fun TextBlockItem(
     OutlinedTextField(
         value = tfValue,
         onValueChange = { newVal ->
-            tfValue = newVal
-            onValueChange(newVal)
+            val adjusted = newVal.copy(
+                annotatedString = com.aistudio.epubedit.kqptxy.util.RichTextUtil.adjustSpans(tfValue.annotatedString, newVal.text)
+            )
+            tfValue = adjusted
+            onValueChange(adjusted)
         },
         modifier = Modifier
             .fillMaxWidth()
@@ -1050,8 +1053,11 @@ fun EditorScreen(
                                             activeBlockIndex = index
                                         },
                                         onValueChange = { newVal ->
+                                            val oldVal = blockTextFieldValues[block.id]
                                             blockTextFieldValues[block.id] = newVal
-                                            editorBlocks[index] = EditorBlock.Text(com.aistudio.epubedit.kqptxy.util.RichTextUtil.annotatedStringToHtml(newVal.annotatedString), block.id)
+                                            if (oldVal == null || oldVal.text != newVal.text) {
+                                                editorBlocks[index] = EditorBlock.Text(com.aistudio.epubedit.kqptxy.util.RichTextUtil.annotatedStringToHtml(newVal.annotatedString), block.id)
+                                            }
                                         }
                                     )
                                 }
