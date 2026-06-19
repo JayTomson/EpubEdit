@@ -33,6 +33,7 @@ object EpubProcessor {
      * Extracts info, chapters, and cover image.
      */
     fun parseEpub(context: Context, uri: Uri, titleId: Long? = null): ParsedEpub? {
+        val keepOriginal = !context.getSharedPreferences("app_settings", android.content.Context.MODE_PRIVATE).getBoolean("pref_convert_epub_system", true)
         val resolver = context.contentResolver
         val tempDir = File(context.cacheDir, "epub_unzipped_${System.currentTimeMillis()}")
         tempDir.mkdirs()
@@ -497,7 +498,7 @@ object EpubProcessor {
 
                         val finalEndIdx = if (endIdx == -1 || endIdx <= finalStartIdx) fullHtml.length else endIdx
                         val htmlSegment = fullHtml.substring(finalStartIdx, finalEndIdx)
-                        val cleanedHtmlSegment = cleanChapterHtml(htmlSegment)
+                        val cleanedHtmlSegment = cleanChapterHtml(htmlSegment, keepOriginal)
 
                         val words = WordStatsHelper.countWords(cleanedHtmlSegment)
                         val chars = WordStatsHelper.countCharacters(cleanedHtmlSegment)
@@ -558,7 +559,7 @@ object EpubProcessor {
                         val chapterFile = File(opfDir, decodedHref)
                         if (chapterFile.exists()) {
                             val htmlContent = chapterFile.readText(Charsets.UTF_8)
-                            val cleanedHtmlContent = cleanChapterHtml(htmlContent)
+                            val cleanedHtmlContent = cleanChapterHtml(htmlContent, keepOriginal)
                             val chapterTitle = extractTitleFromHtml(htmlContent, chapterFile.name)
 
                             val words = WordStatsHelper.countWords(cleanedHtmlContent)
@@ -594,7 +595,7 @@ object EpubProcessor {
             htmlFiles.forEach { file ->
                 try {
                     val htmlContent = file.readText(Charsets.UTF_8)
-                    val cleanedHtmlContent = cleanChapterHtml(htmlContent)
+                    val cleanedHtmlContent = cleanChapterHtml(htmlContent, keepOriginal)
                     val chapterTitle = extractTitleFromHtml(htmlContent, file.name)
 
                     val words = WordStatsHelper.countWords(cleanedHtmlContent)
@@ -678,7 +679,10 @@ object EpubProcessor {
 
     data class ManifestItem(val id: String, val href: String, val mediaType: String?, val properties: String? = null)
 
-    fun cleanChapterHtml(html: String): String {
+    fun cleanChapterHtml(html: String, keepOriginal: Boolean = false): String {
+        if (keepOriginal) {
+            return html.trim()
+        }
         // 1. Remove comments
         var cleaned = html.replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")
         

@@ -101,6 +101,8 @@ object Loc {
         "theme_light" to "Светлая",
         "theme_dark" to "Темная",
         "theme_amoled" to "AMOLED",
+        "convert_epub_system" to "Упрощать структуру EPUB",
+        "convert_epub_system_desc" to "Конвертировать главы в упрощённый формат тегов. Если отключено, сохраняется оригинальный XHTML/CSS со всеми стилями и классами книги.",
         "chapter_illustration" to "Иллюстрация главы",
         "formatting_only_html" to "Форматирование доступно при переключении на вкладку HTML-кода главы.",
         "illustration_empty_line_only" to "Иллюстрацию можно вставить только на пустую строку!",
@@ -109,7 +111,22 @@ object Loc {
         "image_load_error" to "Ошибка загрузки изображения",
         "delete_illustration_cd" to "Удалить иллюстрацию",
         "select_text_first" to "Выделите текст для применения стиля",
-        "focus_text_block_first" to "Сначала выберите текстовый блок"
+        "focus_text_block_first" to "Сначала выберите текстовый блок",
+        "text_color" to "Цвет текста",
+        "custom_hex" to "Свой цвет HEX:",
+        "apply" to "Применить",
+        "bg_color" to "Цвет фона",
+        "link" to "Ссылка",
+        "enter_url" to "Введите URL ссылки:",
+        "alignment" to "Выравнивание",
+        "align_left" to "По левому краю",
+        "align_center" to "По центру",
+        "align_right" to "По правому краю",
+        "align_justify" to "По ширине",
+        "subscript" to "Подстрочный знак (X₂)",
+        "superscript" to "Надстрочный знак (X²)",
+        "heading_choose" to "Выбрать заголовок",
+        "heading_styled" to "Заголовок {num}"
     )
 
     private val en = mapOf(
@@ -212,6 +229,8 @@ object Loc {
         "theme_light" to "Light",
         "theme_dark" to "Dark",
         "theme_amoled" to "AMOLED",
+        "convert_epub_system" to "Simplify EPUB Structure",
+        "convert_epub_system_desc" to "Convert chapters into a simplified tag list. If turned off, preserves the original XHTML/CSS with all book styles and classes.",
         "chapter_illustration" to "Chapter illustration",
         "formatting_only_html" to "Formatting is available by switching to the HTML code tab.",
         "illustration_empty_line_only" to "Illustrations can only be inserted on an empty line!",
@@ -220,7 +239,22 @@ object Loc {
         "image_load_error" to "Image loading error",
         "delete_illustration_cd" to "Delete illustration",
         "select_text_first" to "Select text first to apply formatting",
-        "focus_text_block_first" to "Select a text block first"
+        "focus_text_block_first" to "Select a text block first",
+        "text_color" to "Text Color",
+        "custom_hex" to "Custom HEX Color:",
+        "apply" to "Apply",
+        "bg_color" to "Background Color",
+        "link" to "Link",
+        "enter_url" to "Enter link URL:",
+        "alignment" to "Alignment",
+        "align_left" to "Align Left",
+        "align_center" to "Align Center",
+        "align_right" to "Align Right",
+        "align_justify" to "Justify",
+        "subscript" to "Subscript (X₂)",
+        "superscript" to "Superscript (X²)",
+        "heading_choose" to "Choose Heading",
+        "heading_styled" to "Heading {num}"
     )
 
     fun t(key: String, lang: String): String {

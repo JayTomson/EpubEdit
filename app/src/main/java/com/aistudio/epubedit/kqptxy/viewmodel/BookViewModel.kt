@@ -37,6 +37,9 @@ class BookViewModel(private val app: Application, private val repository: BookRe
     private val _reorderingEnabled = MutableStateFlow(prefs.getBoolean("pref_reordering", true))
     val reorderingEnabled: StateFlow<Boolean> = _reorderingEnabled.asStateFlow()
 
+    private val _convertEpubSystemEnabled = MutableStateFlow(prefs.getBoolean("pref_convert_epub_system", true))
+    val convertEpubSystemEnabled: StateFlow<Boolean> = _convertEpubSystemEnabled.asStateFlow()
+
     fun updateTheme(themeName: String) {
         prefs.edit().putString("pref_theme", themeName).apply()
         _currentTheme.value = themeName
@@ -55,6 +58,11 @@ class BookViewModel(private val app: Application, private val repository: BookRe
     fun updateReordering(enabled: Boolean) {
         prefs.edit().putBoolean("pref_reordering", enabled).apply()
         _reorderingEnabled.value = enabled
+    }
+
+    fun updateConvertEpubSystem(enabled: Boolean) {
+        prefs.edit().putBoolean("pref_convert_epub_system", enabled).apply()
+        _convertEpubSystemEnabled.value = enabled
     }
 
     val titles: StateFlow<List<Title>> = repository.allTitles

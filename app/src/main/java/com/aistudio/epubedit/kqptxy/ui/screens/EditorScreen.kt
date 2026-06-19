@@ -449,8 +449,11 @@ fun EditorScreen(
     var initializedChapterId by remember { mutableStateOf<Long?>(null) }
     var chapterTitle by remember(chapterId) { mutableStateOf("") }
     
+    val prefs = remember { context.getSharedPreferences("app_settings", android.content.Context.MODE_PRIVATE) }
+    val convertSystem = remember { prefs.getBoolean("pref_convert_epub_system", true) }
+    
     // Tracks editing mode (false = Visual/Plain Text blocks, true = Raw HTML)
-    var isHtmlMode by remember { mutableStateOf(false) }
+    var isHtmlMode by remember(chapterId) { mutableStateOf(!convertSystem) }
     
     // Is full screen mode active
     var isFullscreen by remember { mutableStateOf(false) }
@@ -467,6 +470,14 @@ fun EditorScreen(
     
     var imageToDeleteIndex by remember { mutableStateOf<Int?>(null) }
     var showUnsavedChangesDialog by remember { mutableStateOf(false) }
+    
+    // Formatting dialog and menu states
+    var showLinkDialog by remember { mutableStateOf(false) }
+    var linkUrlInput by remember { mutableStateOf("https://") }
+    var showTextColorDialog by remember { mutableStateOf(false) }
+    var showBgColorDialog by remember { mutableStateOf(false) }
+    var showHeadingDialog by remember { mutableStateOf(false) }
+    var showAlignmentDialog by remember { mutableStateOf(false) }
 
     // Load initial blocks
     LaunchedEffect(chapterId, currentChapter) {
@@ -637,6 +648,41 @@ fun EditorScreen(
                                 "<blockquote>" -> {
                                     addStringAnnotation(tag = "QUOTE", annotation = "quote", start = start, end = end)
                                     addStyle(androidx.compose.ui.text.SpanStyle(background = androidx.compose.ui.graphics.Color.LightGray.copy(alpha = 0.2f), fontStyle = androidx.compose.ui.text.font.FontStyle.Italic), start, end)
+                                }
+                                else -> {
+                                    val tagLower = tagOpen.lowercase()
+                                    if (tagLower.startsWith("<span style=\"color:")) {
+                                        try {
+                                            val colorHex = tagOpen.substringAfter("color:").substringBefore('"').trim().removeSuffix(";").trim()
+                                            val colorInt = android.graphics.Color.parseColor(colorHex)
+                                            addStyle(androidx.compose.ui.text.SpanStyle(color = androidx.compose.ui.graphics.Color(colorInt)), start, end)
+                                        } catch (e: Exception) {
+                                            e.printStackTrace()
+                                        }
+                                    } else if (tagLower.startsWith("<span style=\"background-color:")) {
+                                        try {
+                                            val bgHex = tagOpen.substringAfter("background-color:").substringBefore('"').trim().removeSuffix(";").trim()
+                                            val colorInt = android.graphics.Color.parseColor(bgHex)
+                                            addStyle(androidx.compose.ui.text.SpanStyle(background = androidx.compose.ui.graphics.Color(colorInt)), start, end)
+                                        } catch (e: Exception) {
+                                            e.printStackTrace()
+                                        }
+                                    } else if (tagLower.startsWith("<a href=")) {
+                                        try {
+                                            val url = tagOpen.substringAfter("href=\"").substringBefore('"')
+                                            addStringAnnotation(tag = "URL", annotation = url, start = start, end = end)
+                                            addStyle(androidx.compose.ui.text.SpanStyle(color = androidx.compose.ui.graphics.Color.Blue, textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline), start, end)
+                                        } catch (e: Exception) {
+                                            e.printStackTrace()
+                                        }
+                                    } else if (tagLower.startsWith("<div align=")) {
+                                        try {
+                                            val alignDir = tagOpen.substringAfter("align=\"").substringBefore('"')
+                                            addStringAnnotation(tag = "ALIGN", annotation = alignDir, start = start, end = end)
+                                        } catch (e: Exception) {
+                                            e.printStackTrace()
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -894,9 +940,49 @@ fun EditorScreen(
                                 Icon(Icons.Default.FormatStrikethrough, Loc.t("strikethrough", lang))
                             }
                             IconButton(
-                                onClick = { applyFormatAction("<h1>", "</h1>") }
+                                onClick = { showHeadingDialog = true }
                             ) {
-                                Icon(Icons.Default.Title, "H1")
+                                Icon(Icons.Default.Title, Loc.t("heading_choose", lang))
+                            }
+                            IconButton(
+                                onClick = { applyFormatAction("<sup>", "</sup>") }
+                            ) {
+                                Text(
+                                    text = "X²",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            IconButton(
+                                onClick = { applyFormatAction("<sub>", "</sub>") }
+                            ) {
+                                Text(
+                                    text = "X₂",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            IconButton(
+                                onClick = { showTextColorDialog = true }
+                            ) {
+                                Icon(Icons.Default.FormatColorText, Loc.t("text_color", lang))
+                            }
+                            IconButton(
+                                onClick = { showBgColorDialog = true }
+                            ) {
+                                Icon(Icons.Default.FormatColorFill, Loc.t("bg_color", lang))
+                            }
+                            IconButton(
+                                onClick = { showLinkDialog = true }
+                            ) {
+                                Icon(Icons.Default.Link, Loc.t("link", lang))
+                            }
+                            IconButton(
+                                onClick = { showAlignmentDialog = true }
+                            ) {
+                                Icon(Icons.Default.FormatAlignLeft, Loc.t("alignment", lang))
                             }
                             IconButton(
                                 onClick = { applyFormatAction("<li>", "</li>") }
@@ -1227,6 +1313,335 @@ fun EditorScreen(
                         }
                     }
                 }
+            }
+            
+            // Format overlay dialogs
+            if (showLinkDialog) {
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { showLinkDialog = false },
+                    title = { Text(Loc.t("link", lang), fontWeight = FontWeight.Bold) },
+                    text = {
+                        Column {
+                            Text(Loc.t("enter_url", lang), modifier = Modifier.padding(bottom = 8.dp))
+                            OutlinedTextField(
+                                value = linkUrlInput,
+                                onValueChange = { linkUrlInput = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                shape = RoundedCornerShape(8.dp)
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                if (linkUrlInput.isNotBlank()) {
+                                    applyFormatAction("<a href=\"$linkUrlInput\">", "</a>")
+                                }
+                                showLinkDialog = false
+                            }
+                        ) {
+                            Text(Loc.t("create", lang), fontWeight = FontWeight.Bold)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showLinkDialog = false }) {
+                            Text(Loc.t("cancel", lang))
+                        }
+                    }
+                )
+            }
+
+            if (showTextColorDialog) {
+                val colorsList = listOf(
+                    "#333333" to "Default",
+                    "#E74C3C" to "Coral",
+                    "#E67E22" to "Orange",
+                    "#F1C40F" to "Yellow",
+                    "#2ECC71" to "Green",
+                    "#3498DB" to "Blue",
+                    "#9B59B6" to "Purple",
+                    "#FF6B81" to "Pink",
+                    "#8D6E63" to "Brown",
+                    "#7F8C8D" to "Grey"
+                )
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { showTextColorDialog = false },
+                    title = { Text(Loc.t("text_color", lang), fontWeight = FontWeight.Bold) },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                                columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(5),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.heightIn(max = 110.dp)
+                            ) {
+                                items(colorsList.size) { i ->
+                                    val (hex, name) = colorsList[i]
+                                    Box(
+                                        modifier = Modifier
+                                            .size(44.dp)
+                                            .background(Color(android.graphics.Color.parseColor(hex)), androidx.compose.foundation.shape.CircleShape)
+                                            .border(2.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), androidx.compose.foundation.shape.CircleShape)
+                                            .clickable {
+                                                applyFormatAction("<span style=\"color:$hex\">", "</span>")
+                                                showTextColorDialog = false
+                                            }
+                                    )
+                                }
+                            }
+                            
+                            var customHex by remember { mutableStateOf("#") }
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(Loc.t("custom_hex", lang), style = MaterialTheme.typography.bodyMedium)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    OutlinedTextField(
+                                        value = customHex,
+                                        onValueChange = { input ->
+                                            val filtered = input.uppercase().filter { it.isDigit() || it in 'A'..'F' || it == '#' }
+                                            customHex = if (filtered.startsWith("#")) filtered else "#$filtered"
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        placeholder = { Text("#000000") },
+                                        singleLine = true,
+                                        shape = RoundedCornerShape(8.dp)
+                                    )
+                                    
+                                    val parsedColor = remember(customHex) {
+                                        try {
+                                            val cleaned = if (customHex.startsWith("#")) customHex else "#$customHex"
+                                            if (cleaned.length == 4 || cleaned.length == 7 || cleaned.length == 9) {
+                                                Color(android.graphics.Color.parseColor(cleaned))
+                                            } else {
+                                                Color.Transparent
+                                            }
+                                        } catch (e: Exception) {
+                                            Color.Transparent
+                                        }
+                                    }
+                                    
+                                    Box(
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .background(parsedColor, androidx.compose.foundation.shape.CircleShape)
+                                            .border(2.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), androidx.compose.foundation.shape.CircleShape)
+                                    )
+                                    
+                                    Button(
+                                        onClick = {
+                                            val cleaned = if (customHex.startsWith("#")) customHex else "#$customHex"
+                                            try {
+                                                android.graphics.Color.parseColor(cleaned)
+                                                applyFormatAction("<span style=\"color:$cleaned\">", "</span>")
+                                                showTextColorDialog = false
+                                            } catch (e: Exception) {
+                                            }
+                                        },
+                                        enabled = parsedColor != Color.Transparent,
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text(Loc.t("apply", lang), fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { showTextColorDialog = false }) {
+                            Text(Loc.t("close", lang))
+                        }
+                    }
+                )
+            }
+
+            if (showBgColorDialog) {
+                val bgColorsList = listOf(
+                    "#FFFFFF" to "White",
+                    "#F5F5F5" to "Alabaster",
+                    "#FFF2CC" to "Sand",
+                    "#E2EFDA" to "Mint",
+                    "#FCE4D6" to "Peach",
+                    "#D9E1F2" to "Frost",
+                    "#EDEDED" to "Light Grey",
+                    "#F9CB9C" to "Warm Yellow",
+                    "#EA9999" to "Soft Red",
+                    "#C9DAF8" to "Soft Blue"
+                )
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { showBgColorDialog = false },
+                    title = { Text(Loc.t("bg_color", lang), fontWeight = FontWeight.Bold) },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                                columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(5),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.heightIn(max = 110.dp)
+                            ) {
+                                items(bgColorsList.size) { i ->
+                                    val (hex, name) = bgColorsList[i]
+                                    Box(
+                                        modifier = Modifier
+                                            .size(44.dp)
+                                            .background(Color(android.graphics.Color.parseColor(hex)), androidx.compose.foundation.shape.CircleShape)
+                                            .border(2.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), androidx.compose.foundation.shape.CircleShape)
+                                            .clickable {
+                                                applyFormatAction("<span style=\"background-color:$hex\">", "</span>")
+                                                showBgColorDialog = false
+                                            }
+                                    )
+                                }
+                            }
+                            
+                            var customHex by remember { mutableStateOf("#") }
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(Loc.t("custom_hex", lang), style = MaterialTheme.typography.bodyMedium)
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    OutlinedTextField(
+                                        value = customHex,
+                                        onValueChange = { input ->
+                                            val filtered = input.uppercase().filter { it.isDigit() || it in 'A'..'F' || it == '#' }
+                                            customHex = if (filtered.startsWith("#")) filtered else "#$filtered"
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        placeholder = { Text("#000000") },
+                                        singleLine = true,
+                                        shape = RoundedCornerShape(8.dp)
+                                    )
+                                    
+                                    val parsedColor = remember(customHex) {
+                                        try {
+                                            val cleaned = if (customHex.startsWith("#")) customHex else "#$customHex"
+                                            if (cleaned.length == 4 || cleaned.length == 7 || cleaned.length == 9) {
+                                                Color(android.graphics.Color.parseColor(cleaned))
+                                            } else {
+                                                Color.Transparent
+                                            }
+                                        } catch (e: Exception) {
+                                            Color.Transparent
+                                        }
+                                    }
+                                    
+                                    Box(
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .background(parsedColor, androidx.compose.foundation.shape.CircleShape)
+                                            .border(2.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), androidx.compose.foundation.shape.CircleShape)
+                                    )
+                                    
+                                    Button(
+                                        onClick = {
+                                            val cleaned = if (customHex.startsWith("#")) customHex else "#$customHex"
+                                            try {
+                                                android.graphics.Color.parseColor(cleaned)
+                                                applyFormatAction("<span style=\"background-color:$cleaned\">", "</span>")
+                                                showBgColorDialog = false
+                                            } catch (e: Exception) {
+                                            }
+                                        },
+                                        enabled = parsedColor != Color.Transparent,
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Text(Loc.t("apply", lang), fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { showBgColorDialog = false }) {
+                            Text(Loc.t("close", lang))
+                        }
+                    }
+                )
+            }
+
+            if (showHeadingDialog) {
+                val headings = listOf(
+                    "h1" to "H1",
+                    "h2" to "H2",
+                    "h3" to "H3",
+                    "h4" to "H4",
+                    "h5" to "H5"
+                )
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { showHeadingDialog = false },
+                    title = { Text(Loc.t("heading_choose", lang), fontWeight = FontWeight.Bold) },
+                    text = {
+                        Column(modifier = Modifier.padding(top = 8.dp)) {
+                            headings.forEach { (tag, label) ->
+                                TextButton(
+                                    onClick = {
+                                        applyFormatAction("<$tag>", "</$tag>")
+                                        showHeadingDialog = false
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    val displayText = Loc.t("heading_styled", lang).replace("{num}", tag.removePrefix("h")) + " (${tag.uppercase()})"
+                                    Text(
+                                        text = displayText,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Start
+                                    )
+                                }
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { showHeadingDialog = false }) {
+                            Text(Loc.t("cancel", lang))
+                        }
+                    }
+                )
+            }
+
+            if (showAlignmentDialog) {
+                val alignments = listOf(
+                    "left" to Loc.t("align_left", lang),
+                    "center" to Loc.t("align_center", lang),
+                    "right" to Loc.t("align_right", lang),
+                    "justify" to Loc.t("align_justify", lang)
+                )
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { showAlignmentDialog = false },
+                    title = { Text(Loc.t("alignment", lang), fontWeight = FontWeight.Bold) },
+                    text = {
+                        Column(modifier = Modifier.padding(top = 8.dp)) {
+                            alignments.forEach { (dir, label) ->
+                                TextButton(
+                                    onClick = {
+                                        applyFormatAction("<div align=\"$dir\">", "</div>")
+                                        showAlignmentDialog = false
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Start
+                                    )
+                                }
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { showAlignmentDialog = false }) {
+                            Text(Loc.t("cancel", lang))
+                        }
+                    }
+                )
             }
         }
     }
