@@ -1,0 +1,67 @@
+name: Build Android APKs (Debug & Release)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up JDK 21
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'temurin'
+
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v4
+      with:
+        gradle-version: '9.3.1'
+        cache-disabled: true
+        validate-wrappers: false
+
+    - name: Decode or Generate Debug Keystore
+      run: |
+        if [ -f debug.keystore.base64 ]; then
+          base64 -d debug.keystore.base64 > debug.keystore
+        else
+          keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+        fi
+
+    - name: Set up Keystore for Release Build
+      run: |
+        if [ -n "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" ]; then
+          echo "Decoding release keystore from GitHub Secrets..."
+          echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > my-upload-key.jks
+          echo "STORE_PASSWORD=${{ secrets.STORE_PASSWORD }}" >> $GITHUB_ENV
+          echo "KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}" >> $GITHUB_ENV
+          echo "KEYSTORE_PATH=my-upload-key.jks" >> $GITHUB_ENV
+        else
+          echo "No release keystore secret found. Generating a temporary signing key for release compilation..."
+          keytool -genkey -v -keystore my-upload-key.jks -storepass my_secure_password_123 -alias upload -keypass my_secure_password_123 -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Release,O=Android,C=US"
+          echo "STORE_PASSWORD=my_secure_password_123" >> $GITHUB_ENV
+          echo "KEY_PASSWORD=my_secure_password_123" >> $GITHUB_ENV
+          echo "KEYSTORE_PATH=my-upload-key.jks" >> $GITHUB_ENV
+        fi
+
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew || true
+
+    - name: Build Debug & Release APKs
+      run: ./gradlew assembleDebug assembleRelease || gradle assembleDebug assembleRelease
+
+    - name: Upload APKs
+      uses: actions/upload-artifact@v4
+      with:
+        name: android-apks
+        path: |
+          app/build/outputs/apk/debug/app-debug.apk
+          app/build/outputs/apk/release/app-release.apk
