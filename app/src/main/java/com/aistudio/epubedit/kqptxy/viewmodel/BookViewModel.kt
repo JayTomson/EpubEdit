@@ -36,7 +36,7 @@ class BookViewModel(private val app: Application, private val repository: BookRe
     private val _reorderingEnabled = MutableStateFlow(prefs.getBoolean("pref_reordering", true))
     val reorderingEnabled: StateFlow<Boolean> = _reorderingEnabled.asStateFlow()
 
-    private val _convertEpubSystemEnabled = MutableStateFlow(prefs.getBoolean("pref_convert_epub_system", true))
+    private val _convertEpubSystemEnabled = MutableStateFlow(prefs.getBoolean("pref_convert_epub_system", false))
     val convertEpubSystemEnabled: StateFlow<Boolean> = _convertEpubSystemEnabled.asStateFlow()
 
     private val _exportError = MutableStateFlow<ExportError?>(null)

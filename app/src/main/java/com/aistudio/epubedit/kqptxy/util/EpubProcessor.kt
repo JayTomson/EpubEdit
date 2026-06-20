@@ -39,7 +39,7 @@ object EpubProcessor {
      * Extracts info, chapters, and cover image.
      */
     fun parseEpub(context: Context, uri: Uri, titleId: Long? = null): ParsedEpub? {
-        val keepOriginal = !context.getSharedPreferences("app_settings", android.content.Context.MODE_PRIVATE).getBoolean("pref_convert_epub_system", true)
+        val keepOriginal = !context.getSharedPreferences("app_settings", android.content.Context.MODE_PRIVATE).getBoolean("pref_convert_epub_system", false)
         val resolver = context.contentResolver
         val tempDir = File(context.cacheDir, "epub_unzipped_${System.currentTimeMillis()}")
         tempDir.mkdirs()
@@ -1083,7 +1083,7 @@ object EpubProcessor {
         generateToc: Boolean = true
     ): File? {
         val prefs = context.getSharedPreferences("app_settings", Context.MODE_PRIVATE)
-        val keepOriginalSetting = !prefs.getBoolean("pref_convert_epub_system", true)
+        val keepOriginalSetting = !prefs.getBoolean("pref_convert_epub_system", false)
         if (keepOriginalSetting && titleId != null) {
             val originalEpubDir = File(context.filesDir, "epub_originals/book_$titleId")
             if (!originalEpubDir.exists()) {
@@ -1198,7 +1198,7 @@ object EpubProcessor {
                 }
             }
 
-            val keepOriginal = !prefs.getBoolean("pref_convert_epub_system", true)
+            val keepOriginal = !prefs.getBoolean("pref_convert_epub_system", false)
 
             // Packaging persistent CSS and other assets back into the stream if keepOriginal is enabled
             if (keepOriginal && titleId != null) {

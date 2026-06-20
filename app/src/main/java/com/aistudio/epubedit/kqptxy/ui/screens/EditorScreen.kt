@@ -478,7 +478,7 @@ fun EditorScreen(
     var chapterTitle by remember(chapterId) { mutableStateOf("") }
     
     val prefs = remember { context.getSharedPreferences("app_settings", android.content.Context.MODE_PRIVATE) }
-    val convertSystem = remember { prefs.getBoolean("pref_convert_epub_system", true) }
+    val convertSystem = remember { prefs.getBoolean("pref_convert_epub_system", false) }
     
     // Tracks editing mode (false = Visual/Plain Text blocks, true = Raw HTML)
     var isHtmlMode by remember(chapterId) { mutableStateOf(!convertSystem) }

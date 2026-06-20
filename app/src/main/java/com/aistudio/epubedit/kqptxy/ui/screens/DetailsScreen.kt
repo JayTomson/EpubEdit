@@ -718,6 +718,7 @@ fun ChaptersTabContent(
     currentLang: String
 ) {
     val context = LocalContext.current
+    val convertEpubSystemEnabled by viewModel.convertEpubSystemEnabled.collectAsState()
     var isSelectionMode by remember { mutableStateOf(false) }
     val selectedChapters = remember { mutableStateListOf<Long>() }
 
@@ -954,22 +955,37 @@ fun ChaptersTabContent(
                 title = { Text("Экспорт EPUB", fontWeight = FontWeight.Bold) },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Text("Настройки сохранения:")
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { isGenerateToc = !isGenerateToc }
-                                .padding(vertical = 4.dp)
-                        ) {
-                            Checkbox(
-                                checked = isGenerateToc,
-                                onCheckedChange = { isGenerateToc = it }
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            if (currentLang == "en") "Export options:" else "Настройки сохранения:",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        if (convertEpubSystemEnabled) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { isGenerateToc = !isGenerateToc }
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                Checkbox(
+                                    checked = isGenerateToc,
+                                    onCheckedChange = { isGenerateToc = it }
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    if (currentLang == "en") "Generate book table of contents" else "Генерировать файл содержания",
+                                    fontSize = 14.sp
+                                )
+                            }
+                        } else {
                             Text(
-                                "Генерировать файл содержания",
-                                fontSize = 14.sp
+                                if (currentLang == "en") 
+                                    "Original EPUB structure will be preserved. Table of contents is retained from the original file." 
+                                else 
+                                    "Будет сохранена оригинальная структура EPUB. Содержание сохраняется из исходного файла.",
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
