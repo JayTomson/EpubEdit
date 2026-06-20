@@ -10,7 +10,18 @@ object EpubMultiVolumeMerger {
 
         sourceDirs.forEachIndexed { idx, dir ->
             val volumePrefix = "volume_${idx + 1}"
-            val opfFile = dir.walk().firstOrNull { it.name.endsWith(".opf") } ?: return@forEachIndexed
+            
+            var opfRelPath = "OEBPS/content.opf"
+            val containerFile = File(dir, "META-INF/container.xml")
+            if (containerFile.exists()) {
+                val match = Regex("""full-path\s*=\s*["']([^"']+)["']""").find(containerFile.readText())
+                if (match != null) {
+                    opfRelPath = match.groupValues[1]
+                }
+            }
+            
+            val opfFile = File(dir, opfRelPath)
+            if (!opfFile.exists()) return@forEachIndexed
             val opfContent = opfFile.readText(Charsets.UTF_8)
 
             if (idx == 0) {
@@ -67,23 +78,35 @@ object EpubMultiVolumeMerger {
             }
 
             // Извлекаем все <item> из <manifest>, добавляем префикс пути и уникализируем id
-            val itemRegex = Regex("""<item\s+[^>]*id="([^"]+)"[^>]*href="([^"]+)"[^>]*/?>""", RegexOption.IGNORE_CASE)
+            val itemRegex = Regex("""<item([^>]+)/?>""", RegexOption.IGNORE_CASE)
             itemRegex.findAll(opfContent).forEach { m ->
-                val originalId = m.groupValues[1]
-                val href = m.groupValues[2]
-                val newId = "${volumePrefix}_$originalId"
-                val newHref = "$volumePrefix/$href"
-                allManifestItems.add(
-                    m.value.replace("id=\"$originalId\"", "id=\"$newId\"")
-                           .replace("href=\"$href\"", "href=\"$newHref\"")
-                )
+                val attrs = m.groupValues[1]
+                val idMatch = Regex("""id\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE).find(attrs)
+                val hrefMatch = Regex("""href\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE).find(attrs)
+                
+                if (idMatch != null && hrefMatch != null) {
+                    val originalId = idMatch.groupValues[1]
+                    val href = hrefMatch.groupValues[1]
+                    val newId = "${volumePrefix}_$originalId"
+                    val newHref = "$volumePrefix/$href"
+                    allManifestItems.add(
+                        m.value.replace("id=\"$originalId\"", "id=\"$newId\"")
+                               .replace("id='$originalId'", "id='$newId'")
+                               .replace("href=\"$href\"", "href=\"$newHref\"")
+                               .replace("href='$href'", "href='$newHref'")
+                    )
+                }
             }
 
             // Извлекаем порядок чтения из <spine>
-            val spineRegex = Regex("""<itemref\s+idref="([^"]+)"[^>]*/?>""", RegexOption.IGNORE_CASE)
+            val spineRegex = Regex("""<itemref([^>]+)/?>""", RegexOption.IGNORE_CASE)
             spineRegex.findAll(opfContent).forEach { m ->
-                val originalId = m.groupValues[1]
-                allSpineItems.add("""<itemref idref="${volumePrefix}_$originalId"/>""")
+                val attrs = m.groupValues[1]
+                val idRefMatch = Regex("""idref\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE).find(attrs)
+                if (idRefMatch != null) {
+                    val originalId = idRefMatch.groupValues[1]
+                    allSpineItems.add("""<itemref idref="${volumePrefix}_$originalId"/>""")
+                }
             }
         }
 

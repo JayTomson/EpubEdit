@@ -1395,12 +1395,30 @@ object EpubProcessor {
     }
 
     private fun isCoverFile(relPath: String, opfText: String): Boolean {
-        val coverItemRegex = Regex(
-            """<item[^>]*properties="[^"]*cover-image[^"]*"[^>]*href="([^"]+)"""",
-            RegexOption.IGNORE_CASE
-        )
-        val coverHref = coverItemRegex.find(opfText)?.groupValues?.get(1) ?: return false
-        return relPath.endsWith(coverHref, ignoreCase = true)
+        // EPUB3 way
+        val coverItemRegex3 = Regex("""<item[^>]+properties\s*=\s*["'][^"']*cover-image[^"']*["'][^>]+href\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+        val coverItemRegex3Reverse = Regex("""<item[^>]+href\s*=\s*["']([^"']+)["'][^>]+properties\s*=\s*["'][^"']*cover-image[^"']*["']""", RegexOption.IGNORE_CASE)
+
+        var coverHref = coverItemRegex3.find(opfText)?.groupValues?.get(1)
+            ?: coverItemRegex3Reverse.find(opfText)?.groupValues?.get(1)
+
+        // EPUB2 way
+        if (coverHref == null) {
+            val metaCoverRegex = Regex("""<meta[^>]+name\s*=\s*["']cover["'][^>]+content\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+            val metaCoverRegexReverse = Regex("""<meta[^>]+content\s*=\s*["']([^"']+)["'][^>]+name\s*=\s*["']cover["']""", RegexOption.IGNORE_CASE)
+            val coverId = metaCoverRegex.find(opfText)?.groupValues?.get(1)
+                ?: metaCoverRegexReverse.find(opfText)?.groupValues?.get(1)
+            
+            if (coverId != null) {
+                // Find item with this id. Order of attributes can be anything.
+                val itemRegex = Regex("""<item(?:\s+[^>]+)?\s+id\s*=\s*["']${Regex.escape(coverId)}["'](?:\s+[^>]+)?\s+href\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+                val itemRegexReverse = Regex("""<item(?:\s+[^>]+)?\s+href\s*=\s*["']([^"']+)["'](?:\s+[^>]+)?\s+id\s*=\s*["']${Regex.escape(coverId)}["']""", RegexOption.IGNORE_CASE)
+                coverHref = itemRegex.find(opfText)?.groupValues?.get(1)
+                    ?: itemRegexReverse.find(opfText)?.groupValues?.get(1)
+            }
+        }
+
+        return coverHref != null && relPath.endsWith(coverHref, ignoreCase = true)
     }
 
     private fun removeDeletedChaptersFromToc(
@@ -1601,6 +1619,16 @@ object EpubProcessor {
                     val volumePrefix = "volume_${volumeIndex + 1}"
                     val volumeChapters = if (sourceFileId != null) { chaptersBySource[sourceFileId] ?: emptyList() } else { existingChapters }
 
+                    // Identify OPF path for this volume to get opfText for cover parsing
+                    var opfRelPath = "OEBPS/content.opf"
+                    val container = File(sourceDir, "META-INF/container.xml")
+                    if (container.exists()) {
+                        val m = Regex("""full-path\s*=\s*["']([^"']+)["']""").find(container.readText())
+                        if (m != null) opfRelPath = m.groupValues[1]
+                    }
+                    val opfFile = File(sourceDir, opfRelPath)
+                    val opfTextRaw = if (opfFile.exists()) opfFile.readText() else ""
+
                     fun walk(dir: File, relBase: String) {
                         dir.listFiles()?.forEach { f ->
                             val relPathRaw = f.relativeTo(sourceDir).path.replace('\\', '/')
@@ -1611,17 +1639,27 @@ object EpubProcessor {
                                 if (f.name == "mimetype") return@forEach
 
                                 zos.putNextEntry(ZipEntry(relPath))
-                                val chaptersForThisFile = volumeChapters.filter {
-                                    it.originalFilePath == relPathRaw
-                                }
-                                if (chaptersForThisFile.isEmpty()) {
-                                    f.inputStream().use { it.copyTo(zos) }
-                                } else if (chaptersForThisFile.size == 1 && chaptersForThisFile.first().anchorStart == null) {
-                                    val override = chaptersForThisFile.first()
-                                    zos.write((override.displayHtml ?: override.contentHtml).toByteArray(Charsets.UTF_8))
+                                
+                                if (coverImagePath != null && isCoverFile(relPathRaw, opfTextRaw)) {
+                                    val coverFile = File(coverImagePath)
+                                    if (coverFile.exists()) {
+                                        coverFile.inputStream().use { it.copyTo(zos) }
+                                    } else {
+                                        f.inputStream().use { it.copyTo(zos) }
+                                    }
                                 } else {
-                                    val rebuiltContent = rebuildSplitFileContent(f, chaptersForThisFile)
-                                    zos.write(rebuiltContent.toByteArray(Charsets.UTF_8))
+                                    val chaptersForThisFile = volumeChapters.filter {
+                                        it.originalFilePath == relPathRaw
+                                    }
+                                    if (chaptersForThisFile.isEmpty()) {
+                                        f.inputStream().use { it.copyTo(zos) }
+                                    } else if (chaptersForThisFile.size == 1 && chaptersForThisFile.first().anchorStart == null) {
+                                        val override = chaptersForThisFile.first()
+                                        zos.write((override.displayHtml ?: override.contentHtml).toByteArray(Charsets.UTF_8))
+                                    } else {
+                                        val rebuiltContent = rebuildSplitFileContent(f, chaptersForThisFile)
+                                        zos.write(rebuiltContent.toByteArray(Charsets.UTF_8))
+                                    }
                                 }
                                 zos.closeEntry()
                             }
