@@ -1433,6 +1433,51 @@ object EpubProcessor {
         return ncx to nav
     }
 
+    private fun extractAllTocEntries(ncxText: String?, navText: String?): Set<String> {
+        val entries = mutableSetOf<String>()
+
+        if (ncxText != null) {
+            val contentSrcRegex = Regex("<content\\s+src=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
+            contentSrcRegex.findAll(ncxText).forEach { m ->
+                entries.add(m.groupValues[1])
+            }
+        }
+        if (navText != null) {
+            val aHrefRegex = Regex("<a\\s+href=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
+            aHrefRegex.findAll(navText).forEach { m ->
+                entries.add(m.groupValues[1])
+            }
+        }
+        return entries
+    }
+
+    private fun computeDeletedChapters(
+        tocEntries: Set<String>,
+        existingChapters: List<ParsedChapter>
+    ): List<Pair<String, String?>> {
+        val keptSignatures = existingChapters.mapNotNull { chapter ->
+            val path = chapter.originalFilePath ?: return@mapNotNull null
+            val fileNameOnly = path.substringAfterLast("/")
+            if (chapter.anchorStart != null) "$fileNameOnly#${chapter.anchorStart}" else fileNameOnly
+        }.toSet()
+
+        val deleted = mutableListOf<Pair<String, String?>>()
+        tocEntries.forEach { src ->
+            val fileNameOnly = src.substringAfterLast("/").substringBefore("#")
+            val anchor = src.substringAfter("#", "").ifEmpty { null }
+            val signature = if (anchor != null) "$fileNameOnly#$anchor" else fileNameOnly
+
+            val stillExists = keptSignatures.contains(signature) ||
+                              (anchor == null && keptSignatures.any { it.startsWith("$fileNameOnly#") }) ||
+                              (anchor != null && keptSignatures.contains(fileNameOnly))
+
+            if (!stillExists) {
+                deleted.add(fileNameOnly to anchor)
+            }
+        }
+        return deleted
+    }
+
     private fun exportFromOriginalArchive(
         context: Context,
         fileName: String,
@@ -1597,6 +1642,14 @@ object EpubProcessor {
                     }
                 }
 
+                val tocEntries = extractAllTocEntries(ncxText, navText)
+                val deletedChapters = computeDeletedChapters(tocEntries, existingChapters)
+                if (deletedChapters.isNotEmpty()) {
+                    val (cleanedNcx, cleanedNav) = removeDeletedChaptersFromToc(ncxText, navText, deletedChapters)
+                    ncxText = cleanedNcx
+                    navText = cleanedNav
+                }
+
                 fun walk(dir: File) {
                     dir.listFiles()?.forEach { f ->
                         val relPath = f.relativeTo(sourceDir).path.replace('\\', '/')
@@ -1604,6 +1657,12 @@ object EpubProcessor {
                             walk(f)
                         } else {
                             if (relPath == "mimetype") return@forEach
+
+                            val isOrphaned = deletedChapters.any { (fileName, _) -> f.name == fileName } &&
+                                              existingChapters.none { it.originalFilePath?.endsWith(f.name) == true }
+                            if (isOrphaned && f.extension.lowercase() in setOf("xhtml", "html", "htm")) {
+                                return@forEach
+                            }
 
                             zos.putNextEntry(ZipEntry(relPath))
 
