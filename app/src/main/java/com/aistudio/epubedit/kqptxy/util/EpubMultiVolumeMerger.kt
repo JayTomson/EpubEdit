@@ -78,6 +78,7 @@ object EpubMultiVolumeMerger {
             }
 
             // Извлекаем все <item> из <manifest>, добавляем префикс пути и уникализируем id
+            val opfDir = if (opfRelPath.contains("/")) opfRelPath.substringBeforeLast("/") + "/" else ""
             val itemRegex = Regex("""<item([^>]+)/?>""", RegexOption.IGNORE_CASE)
             itemRegex.findAll(opfContent).forEach { m ->
                 val attrs = m.groupValues[1]
@@ -88,7 +89,7 @@ object EpubMultiVolumeMerger {
                     val originalId = idMatch.groupValues[1]
                     val href = hrefMatch.groupValues[1]
                     val newId = "${volumePrefix}_$originalId"
-                    val newHref = "$volumePrefix/$href"
+                    val newHref = "$volumePrefix/$opfDir$href"
                     allManifestItems.add(
                         m.value.replace("id=\"$originalId\"", "id=\"$newId\"")
                                .replace("id='$originalId'", "id='$newId'")
