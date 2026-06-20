@@ -1575,8 +1575,15 @@ object EpubProcessor {
             return null
         }
 
+        val orderedSourceFileIds = chapters.mapNotNull { it.sourceFileId }.distinct()
         val sourceDirs = baseOriginalsDir.listFiles { f -> f.isDirectory && f.name.startsWith("source_") }
-            ?.sortedBy { it.name } ?: emptyList()
+            ?.sortedWith(compareBy<File> { dir ->
+                val id = dir.name.removePrefix("source_").toLongOrNull()
+                val idx = orderedSourceFileIds.indexOf(id)
+                if (idx >= 0) idx else Int.MAX_VALUE
+            }.thenBy { dir ->
+                dir.name.removePrefix("source_").toLongOrNull() ?: 0L
+            }) ?: emptyList()
 
         // Fallback to old format logic if needed, but since we are replacing all logic...
         // Let's implement single volume using the new robust logic with just one volume iteration.

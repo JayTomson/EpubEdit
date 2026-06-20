@@ -90,12 +90,18 @@ object EpubMultiVolumeMerger {
                     val href = hrefMatch.groupValues[1]
                     val newId = "${volumePrefix}_$originalId"
                     val newHref = "$volumePrefix/$opfDir$href"
-                    allManifestItems.add(
-                        m.value.replace("id=\"$originalId\"", "id=\"$newId\"")
+                    
+                    var itemXml = m.value.replace("id=\"$originalId\"", "id=\"$newId\"")
                                .replace("id='$originalId'", "id='$newId'")
                                .replace("href=\"$href\"", "href=\"$newHref\"")
                                .replace("href='$href'", "href='$newHref'")
-                    )
+                    
+                    // Удаляем properties="nav" из локальных файлов тома, чтобы валидатор не ругался на дубликаты
+                    if (itemXml.contains("properties=\"nav\"", ignoreCase = true) || itemXml.contains("properties='nav'", ignoreCase = true)) {
+                        itemXml = itemXml.replace(Regex("""\s*properties\s*=\s*["']nav["']""", RegexOption.IGNORE_CASE), "")
+                    }
+                    
+                    allManifestItems.add(itemXml)
                 }
             }
 
@@ -112,7 +118,6 @@ object EpubMultiVolumeMerger {
         }
 
         // Remove conflicting toc files from the manifest
-        allManifestItems.removeAll { it.contains("properties=\"nav\"", ignoreCase = true) || it.contains("properties='nav'", ignoreCase = true) }
         allManifestItems.removeAll { it.contains("media-type=\"application/x-dtbncx+xml\"", ignoreCase = true) || it.contains("media-type='application/x-dtbncx+xml'", ignoreCase = true) }
 
         // Add the global merged navigation items
