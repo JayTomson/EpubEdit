@@ -239,13 +239,8 @@ class BookViewModel(private val app: Application, private val repository: BookRe
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 Log.d("BOOK_DEBUG", "importEpub: Starting import of file $fileName (size: $fileSize) for titleId: $titleId")
-                val parsed = EpubProcessor.parseEpub(context, uri, titleId) ?: run {
-                    Log.d("BOOK_DEBUG", "importEpub: Failed to parse EPUB for $fileName")
-                    return@launch
-                }
-                Log.d("BOOK_DEBUG", "importEpub: Parsed successfully. Title: ${parsed.title}, Chapters count: ${parsed.chapters.size}")
                 
-                // Add SourceFile record
+                // Add SourceFile record FIRST so we have the ID for original epub directory
                 val nextFileIndex = repository.getSourceFilesForTitleOneShot(titleId).size
                 val sfId = repository.insertSourceFile(
                     SourceFile(
@@ -256,6 +251,14 @@ class BookViewModel(private val app: Application, private val repository: BookRe
                         uploadedAt = System.currentTimeMillis()
                     )
                 )
+
+                val parsed = EpubProcessor.parseEpub(context, uri, titleId, sfId) ?: run {
+                    Log.d("BOOK_DEBUG", "importEpub: Failed to parse EPUB for $fileName")
+                    // Delete the inserted source file since parsing failed
+                    repository.deleteSourceFile(SourceFile(id = sfId, titleId = titleId, fileName = fileName, fileSize = fileSize, orderIndex = nextFileIndex, uploadedAt = System.currentTimeMillis())) // Just object matching id to delete
+                    return@launch
+                }
+                Log.d("BOOK_DEBUG", "importEpub: Parsed successfully. Title: ${parsed.title}, Chapters count: ${parsed.chapters.size}")
 
                 // If cover image was extracted and the book doesn't have a cover yet, update it
                 val currentTitle = repository.getTitleByIdOneShot(titleId)
@@ -530,7 +533,8 @@ class BookViewModel(private val app: Application, private val repository: BookRe
                         originalFilePath = it.originalFilePath,
                         anchorStart = it.anchorStart,
                         anchorEnd = it.anchorEnd,
-                        displayHtml = it.displayHtml
+                        displayHtml = it.displayHtml,
+                        sourceFileId = it.sourceFileId
                     )
                 }
 
