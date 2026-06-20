@@ -115,11 +115,9 @@ object EpubMultiVolumeMerger {
         allManifestItems.removeAll { it.contains("properties=\"nav\"", ignoreCase = true) || it.contains("properties='nav'", ignoreCase = true) }
         allManifestItems.removeAll { it.contains("media-type=\"application/x-dtbncx+xml\"", ignoreCase = true) || it.contains("media-type='application/x-dtbncx+xml'", ignoreCase = true) }
 
-        if (generateToc) {
-            // Add the global merged navigation items
-            allManifestItems.add("""<item id="merged_nav" href="merged_nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>""")
-            allManifestItems.add("""<item id="merged_ncx" href="merged_toc.ncx" media-type="application/x-dtbncx+xml"/>""")
-        }
+        // Add the global merged navigation items
+        allManifestItems.add("""<item id="merged_nav" href="merged_nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>""")
+        allManifestItems.add("""<item id="merged_ncx" href="merged_toc.ncx" media-type="application/x-dtbncx+xml"/>""")
 
         return """<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="BookId">
@@ -127,7 +125,7 @@ $firstMetadata
 <manifest>
 ${allManifestItems.joinToString("\n")}
 </manifest>
-${if (generateToc) "<spine toc=\"merged_ncx\">\n<itemref idref=\"merged_nav\" />" else "<spine>"}
+${if (generateToc) "<spine toc=\"merged_ncx\">\n<itemref idref=\"merged_nav\" />" else "<spine toc=\"merged_ncx\">"}
 ${allSpineItems.joinToString("\n")}
 </spine>
 </package>"""

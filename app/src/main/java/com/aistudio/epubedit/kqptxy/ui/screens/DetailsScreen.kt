@@ -989,9 +989,9 @@ fun ChaptersTabContent(
                         if (!convertEpubSystemEnabled) {
                             Text(
                                 if (currentLang == "en") 
-                                    "Original EPUB structure will be preserved. TOC is controlled by the checkbox above."
+                                    "Original EPUB structure will be preserved. Chapters will display normally." 
                                 else 
-                                    "Будет сохранена оригинальная структура EPUB. Содержание зависит от галочки выше.",
+                                    "Будет сохранена оригинальная структура EPUB. Все главы отобразятся нормально.",
                                 fontSize = 14.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

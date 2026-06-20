@@ -1669,8 +1669,8 @@ object EpubProcessor {
                     walk(sourceDir, "")
                 }
                 
-                // --- Generate merged TOC (NCX) and NAV (EPUB3) if needed ---
-                if (generateToc) {
+                // --- Generate merged TOC (NCX) and NAV (EPUB3) ---
+                if (true) {
                     val navList = StringBuilder()
                     val ncxNavMap = StringBuilder()
                     var chapterIndex = 1
@@ -1887,22 +1887,11 @@ object EpubProcessor {
                                     } else result.replace(Regex("<metadata([^>]*)>", RegexOption.IGNORE_CASE), "<metadata$1>\n<dc:description>$escaped</dc:description>")
                                 }
                                 
-                                if (!generateToc) {
-                                    // Remove TOC items from single volume OPF so reader does not show a TOC
-                                    result = result.replace(Regex("<item[^>]*properties=[\"'][^\"]*nav[^\"]*[\"'][^>]*\\/?>", RegexOption.IGNORE_CASE), "")
-                                    result = result.replace(Regex("<item[^>]*media-type=[\"']application\\/x-dtbncx\\+xml[\"'][^>]*\\/?>", RegexOption.IGNORE_CASE), "")
-                                    result = result.replace(Regex("toc=[\"'][^\"]*[\"']", RegexOption.IGNORE_CASE), "")
-                                }
-                                
                                 zos.write(result.toByteArray(Charsets.UTF_8))
                             } else if (relPath == ncxPath && ncxText != null) {
-                                if (generateToc) {
-                                    zos.write(ncxText!!.toByteArray(Charsets.UTF_8))
-                                }
+                                zos.write(ncxText!!.toByteArray(Charsets.UTF_8))
                             } else if (relPath == navPath && navText != null) {
-                                if (generateToc) {
-                                    zos.write(navText!!.toByteArray(Charsets.UTF_8))
-                                }
+                                zos.write(navText!!.toByteArray(Charsets.UTF_8))
                             } else if (coverImagePath != null && isCoverFile(relPath, opfTextRaw)) {
                                 val coverFile = File(coverImagePath)
                                 if (coverFile.exists()) {
