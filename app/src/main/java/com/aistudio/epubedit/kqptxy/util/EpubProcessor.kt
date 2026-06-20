@@ -1478,6 +1478,68 @@ object EpubProcessor {
         return deleted
     }
 
+    private fun rebuildSplitFileContent(
+        originalFile: File,
+        chaptersForFile: List<ParsedChapter>
+    ): String {
+        val originalHtml = originalFile.readText(Charsets.UTF_8)
+
+        val sortedChapters = chaptersForFile.sortedBy { chapter ->
+            val anchor = chapter.anchorStart
+            if (anchor == null) {
+                0
+            } else {
+                val idRegex = Regex("""(?:id|name)\s*=\s*["']${Regex.escape(anchor)}["']""", RegexOption.IGNORE_CASE)
+                idRegex.find(originalHtml)?.range?.first ?: Int.MAX_VALUE
+            }
+        }
+
+        val result = StringBuilder()
+        var cursor = 0
+
+        sortedChapters.forEachIndexed { index, chapter ->
+            val anchor = chapter.anchorStart
+            val startIdx = if (anchor == null) {
+                cursor
+            } else {
+                val idRegex = Regex("""(?:id|name)\s*=\s*["']${Regex.escape(anchor)}["']""", RegexOption.IGNORE_CASE)
+                val match = idRegex.find(originalHtml, cursor)
+                if (match != null) originalHtml.lastIndexOf('<', match.range.first).takeIf { it >= 0 } ?: cursor else cursor
+            }
+
+            val endIdx = chapter.anchorEnd?.let { endAnchor ->
+                val idRegex = Regex("""(?:id|name)\s*=\s*["']${Regex.escape(endAnchor)}["']""", RegexOption.IGNORE_CASE)
+                val match = idRegex.find(originalHtml, startIdx)
+                if (match != null) originalHtml.lastIndexOf('<', match.range.first).takeIf { it >= 0 } ?: originalHtml.length else originalHtml.length
+            } ?: run {
+                val nextChapter = sortedChapters.getOrNull(index + 1)
+                val nextAnchor = nextChapter?.anchorStart
+                if (nextAnchor != null) {
+                    val idRegex = Regex("""(?:id|name)\s*=\s*["']${Regex.escape(nextAnchor)}["']""", RegexOption.IGNORE_CASE)
+                    val match = idRegex.find(originalHtml, startIdx)
+                    if (match != null) originalHtml.lastIndexOf('<', match.range.first).takeIf { it >= 0 } ?: originalHtml.length else originalHtml.length
+                } else {
+                    originalHtml.length
+                }
+            }
+
+            if (startIdx > cursor) {
+                result.append(originalHtml.substring(cursor, startIdx))
+            }
+
+            val editedFragment = chapter.displayHtml ?: chapter.contentHtml
+            result.append(editedFragment)
+
+            cursor = endIdx
+        }
+
+        if (cursor < originalHtml.length) {
+            result.append(originalHtml.substring(cursor))
+        }
+
+        return result.toString()
+    }
+
     private fun exportFromOriginalArchive(
         context: Context,
         fileName: String,
@@ -1549,13 +1611,17 @@ object EpubProcessor {
                                 if (f.name == "mimetype") return@forEach
 
                                 zos.putNextEntry(ZipEntry(relPath))
-                                val override = volumeChapters.firstOrNull {
+                                val chaptersForThisFile = volumeChapters.filter {
                                     it.originalFilePath == relPathRaw
                                 }
-                                if (override != null) {
+                                if (chaptersForThisFile.isEmpty()) {
+                                    f.inputStream().use { it.copyTo(zos) }
+                                } else if (chaptersForThisFile.size == 1 && chaptersForThisFile.first().anchorStart == null) {
+                                    val override = chaptersForThisFile.first()
                                     zos.write((override.displayHtml ?: override.contentHtml).toByteArray(Charsets.UTF_8))
                                 } else {
-                                    f.inputStream().use { it.copyTo(zos) }
+                                    val rebuiltContent = rebuildSplitFileContent(f, chaptersForThisFile)
+                                    zos.write(rebuiltContent.toByteArray(Charsets.UTF_8))
                                 }
                                 zos.closeEntry()
                             }
@@ -1703,11 +1769,15 @@ object EpubProcessor {
                                     f.inputStream().use { it.copyTo(zos) }
                                 }
                             } else {
-                                val override = existingChapters.firstOrNull { it.originalFilePath == relPath }
-                                if (override != null) {
+                                val chaptersForThisFile = existingChapters.filter { it.originalFilePath == relPath }
+                                if (chaptersForThisFile.isEmpty()) {
+                                    f.inputStream().use { it.copyTo(zos) }
+                                } else if (chaptersForThisFile.size == 1 && chaptersForThisFile.first().anchorStart == null) {
+                                    val override = chaptersForThisFile.first()
                                     zos.write((override.displayHtml ?: override.contentHtml).toByteArray(Charsets.UTF_8))
                                 } else {
-                                    f.inputStream().use { it.copyTo(zos) }
+                                    val rebuiltContent = rebuildSplitFileContent(f, chaptersForThisFile)
+                                    zos.write(rebuiltContent.toByteArray(Charsets.UTF_8))
                                 }
                             }
                             zos.closeEntry()
