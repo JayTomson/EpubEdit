@@ -1668,6 +1668,95 @@ object EpubProcessor {
                     walk(sourceDir, "")
                 }
                 
+                // --- Generate merged TOC (NCX) and NAV (EPUB3) ---
+                val navList = StringBuilder()
+                val ncxNavMap = StringBuilder()
+                var chapterIndex = 1
+                
+                existingChapters.forEach { chap ->
+                     val sourceFileId = chap.sourceFileId
+                     val sourceDir = dirsToProcess.find { it.name.removePrefix("source_").toLongOrNull() == sourceFileId }
+                     if (sourceDir != null) {
+                         val volumeIndex = dirsToProcess.indexOf(sourceDir)
+                         if (volumeIndex >= 0) {
+                             val volumePrefix = "volume_${volumeIndex + 1}"
+                             var safeChapTitle = escapeXml(stripHtmlTags(chap.title ?: "")).trim()
+                             if (safeChapTitle.isEmpty()) safeChapTitle = "Chapter $chapterIndex"
+                             
+                             val opfFolderRegex = Regex("""full-path\s*=\s*["']([^"']+)["']""").find(File(sourceDir, "META-INF/container.xml").takeIf { it.exists() }?.readText() ?: "")
+                             val opfRelPath = opfFolderRegex?.groupValues?.get(1) ?: "OEBPS/content.opf"
+                             val opfDir = if (opfRelPath.contains("/")) opfRelPath.substringBeforeLast("/") + "/" else ""
+                             
+                             // The chapter originalFilePath is exactly what walk() sees (relPathRaw) if it is relative to sourceDir.
+                             // But wait, the anchor start isn't part of the file path.
+                             val relPathRaw = chap.originalFilePath ?: return@forEach
+                             val fileHrefZip = "$volumePrefix/$relPathRaw"
+                             val finalHref = if (chap.anchorStart != null) "$fileHrefZip#${chap.anchorStart}" else fileHrefZip
+                             
+                             navList.append("<li><a href=\"$finalHref\">$safeChapTitle</a></li>\n")
+                             ncxNavMap.append("""
+                                 <navPoint id="chap_$chapterIndex" playOrder="${chapterIndex}">
+                                     <navLabel>
+                                         <text>$safeChapTitle</text>
+                                     </navLabel>
+                                     <content src="$finalHref"/>
+                                 </navPoint>
+                             """.trimIndent() + "\n")
+                             
+                             chapterIndex++
+                         }
+                     }
+                }
+                
+                if (navList.isEmpty()) {
+                    navList.append("<li><a href=\"\">Content</a></li>")
+                    ncxNavMap.append("""<navPoint id="chap_1" playOrder="1"><navLabel><text>Content</text></navLabel><content src=""/></navPoint>""")
+                }
+                
+                // Write merged_toc.ncx
+                val ncxContent = """
+                    <?xml version="1.0" encoding="UTF-8"?>
+                    <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+                        <head>
+                            <meta name="dtb:uid" content="${java.util.UUID.randomUUID()}"/>
+                            <meta name="dtb:depth" content="1"/>
+                            <meta name="dtb:totalPageCount" content="0"/>
+                            <meta name="dtb:maxPageNumber" content="0"/>
+                        </head>
+                        <docTitle><text>${escapeXml(bookTitle)}</text></docTitle>
+                        <docAuthor><text>${escapeXml(bookAuthor)}</text></docAuthor>
+                        <navMap>
+                            $ncxNavMap
+                        </navMap>
+                    </ncx>
+                """.trimIndent().trim()
+                zos.putNextEntry(ZipEntry("merged_toc.ncx"))
+                zos.write(ncxContent.toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
+                
+                // Write merged_nav.xhtml
+                val navXhtmlContent = """
+                    <?xml version="1.0" encoding="utf-8"?>
+                    <!DOCTYPE html>
+                    <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+                    <head>
+                        <title>Navigation</title>
+                        <meta charset="utf-8" />
+                    </head>
+                    <body>
+                        <nav epub:type="toc" id="toc">
+                            <h1>${escapeXml(bookTitle)}</h1>
+                            <ol>
+                                $navList
+                            </ol>
+                        </nav>
+                    </body>
+                    </html>
+                """.trimIndent().trim()
+                zos.putNextEntry(ZipEntry("merged_nav.xhtml"))
+                zos.write(navXhtmlContent.toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
+                
                 // Then write the merged OPF
                 val mergedOpf = EpubMultiVolumeMerger.mergeOpfManifests(dirsToProcess, bookTitle, bookAuthor, bookDescription)
                 zos.putNextEntry(ZipEntry("merged_content.opf"))

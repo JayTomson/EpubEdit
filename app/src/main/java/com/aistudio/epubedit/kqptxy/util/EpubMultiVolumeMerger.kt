@@ -111,13 +111,22 @@ object EpubMultiVolumeMerger {
             }
         }
 
+        // Remove conflicting toc files from the manifest
+        allManifestItems.removeAll { it.contains("properties=\"nav\"", ignoreCase = true) || it.contains("properties='nav'", ignoreCase = true) }
+        allManifestItems.removeAll { it.contains("media-type=\"application/x-dtbncx+xml\"", ignoreCase = true) || it.contains("media-type='application/x-dtbncx+xml'", ignoreCase = true) }
+
+        // Add the global merged navigation items
+        allManifestItems.add("""<item id="merged_nav" href="merged_nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>""")
+        allManifestItems.add("""<item id="merged_ncx" href="merged_toc.ncx" media-type="application/x-dtbncx+xml"/>""")
+
         return """<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="BookId">
 $firstMetadata
 <manifest>
 ${allManifestItems.joinToString("\n")}
 </manifest>
-<spine>
+<spine toc="merged_ncx">
+<itemref idref="merged_nav" />
 ${allSpineItems.joinToString("\n")}
 </spine>
 </package>"""

@@ -73,4 +73,21 @@ abstract class BookDao {
 
     @Update
     abstract suspend fun updateSourceFilesOrder(files: List<SourceFile>)
+
+    @Transaction
+    open suspend fun appendSourceFileAtomically(sourceFile: SourceFile): Long {
+        val currentCount = getSourceFilesForTitleOneShot(sourceFile.titleId).size
+        val updated = sourceFile.copy(orderIndex = currentCount)
+        return insertSourceFile(updated)
+    }
+
+    @Transaction
+    open suspend fun appendChaptersAtomically(chapters: List<Chapter>) {
+        if (chapters.isEmpty()) return
+        val currentCount = getChaptersForTitleOneShot(chapters.first().titleId).size
+        val updatedChapters = chapters.mapIndexed { index, chapter -> 
+            chapter.copy(orderIndex = currentCount + index)
+        }
+        updatedChapters.forEach { insertChapter(it) }
+    }
 }

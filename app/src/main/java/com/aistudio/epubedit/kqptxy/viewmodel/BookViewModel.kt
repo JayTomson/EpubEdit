@@ -235,141 +235,129 @@ class BookViewModel(private val app: Application, private val repository: BookRe
         }
     }
 
-    fun importEpub(context: Context, titleId: Long, uri: Uri, fileName: String, fileSize: Long) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                Log.d("BOOK_DEBUG", "importEpub: Starting import of file $fileName (size: $fileSize) for titleId: $titleId")
-                
-                // Add SourceFile record FIRST so we have the ID for original epub directory
-                val nextFileIndex = repository.getSourceFilesForTitleOneShot(titleId).size
-                val sfId = repository.insertSourceFile(
-                    SourceFile(
-                        titleId = titleId,
-                        fileName = fileName,
-                        fileSize = fileSize,
-                        orderIndex = nextFileIndex,
-                        uploadedAt = System.currentTimeMillis()
-                    )
+    suspend fun importEpub(context: Context, titleId: Long, uri: Uri, fileName: String, fileSize: Long) = withContext(Dispatchers.IO) {
+        try {
+            Log.d("BOOK_DEBUG", "importEpub: Starting import of file $fileName (size: $fileSize) for titleId: $titleId")
+            
+            // Add SourceFile record FIRST so we have the ID for original epub directory
+            val sfId = repository.appendSourceFileAtomically(
+                SourceFile(
+                    titleId = titleId,
+                    fileName = fileName,
+                    fileSize = fileSize,
+                    orderIndex = 0, // Ignored by appendSourceFileAtomically
+                    uploadedAt = System.currentTimeMillis()
                 )
+            )
 
-                val parsed = EpubProcessor.parseEpub(context, uri, titleId, sfId) ?: run {
-                    Log.d("BOOK_DEBUG", "importEpub: Failed to parse EPUB for $fileName")
-                    // Delete the inserted source file since parsing failed
-                    repository.deleteSourceFile(SourceFile(id = sfId, titleId = titleId, fileName = fileName, fileSize = fileSize, orderIndex = nextFileIndex, uploadedAt = System.currentTimeMillis())) // Just object matching id to delete
-                    return@launch
-                }
-                Log.d("BOOK_DEBUG", "importEpub: Parsed successfully. Title: ${parsed.title}, Chapters count: ${parsed.chapters.size}")
-
-                // If cover image was extracted and the book doesn't have a cover yet, update it
-                val currentTitle = repository.getTitleByIdOneShot(titleId)
-                if (currentTitle != null) {
-                    val updatedTitle = currentTitle.copy(
-                        coverImage = if (currentTitle.coverImage.isNullOrEmpty()) parsed.coverImagePath else currentTitle.coverImage,
-                        originalEpubDirPath = parsed.originalEpubDirPath,
-                        originalOpfRelativePath = parsed.originalOpfRelativePath
-                    )
-                    repository.updateTitle(updatedTitle)
-                }
-
-                 // Append parsed chapters to Title's chapters list
-                 val nextChapterIndex = repository.getChaptersForTitleOneShot(titleId).size
-                 parsed.chapters.forEachIndexed { i, pc ->
-                     Log.d("BOOK_DEBUG", "importEpub: Inserting parsed chapter #$i [${pc.title}] to DB. Content length: ${pc.contentHtml.length}")
-                     repository.insertChapter(
-                         Chapter(
-                             titleId = titleId,
-                             sourceFileId = sfId,
-                             title = pc.title,
-                             contentHtml = pc.contentHtml,
-                             orderIndex = nextChapterIndex + i,
-                             wordCount = pc.wordCount,
-                             characterCount = pc.characterCount,
-                             previewImagePath = pc.previewImagePath,
-                             originalFilePath = pc.originalFilePath,
-                             anchorStart = pc.anchorStart,
-                             anchorEnd = pc.anchorEnd,
-                             displayHtml = pc.displayHtml
-                         )
-                     )
-                 }
-            } catch (e: Exception) {
-                Log.e("BookViewModel", "Failed importing epub", e)
+            val parsed = EpubProcessor.parseEpub(context, uri, titleId, sfId) ?: run {
+                Log.d("BOOK_DEBUG", "importEpub: Failed to parse EPUB for $fileName")
+                // Delete the inserted source file since parsing failed
+                repository.deleteSourceFile(SourceFile(id = sfId, titleId = titleId, fileName = fileName, fileSize = fileSize, orderIndex = 0, uploadedAt = System.currentTimeMillis())) // Just object matching id to delete
+                return@withContext
             }
+            Log.d("BOOK_DEBUG", "importEpub: Parsed successfully. Title: ${parsed.title}, Chapters count: ${parsed.chapters.size}")
+
+            // If cover image was extracted and the book doesn't have a cover yet, update it
+            val currentTitle = repository.getTitleByIdOneShot(titleId)
+            if (currentTitle != null) {
+                val updatedTitle = currentTitle.copy(
+                    coverImage = if (currentTitle.coverImage.isNullOrEmpty()) parsed.coverImagePath else currentTitle.coverImage,
+                    originalEpubDirPath = parsed.originalEpubDirPath,
+                    originalOpfRelativePath = parsed.originalOpfRelativePath
+                )
+                repository.updateTitle(updatedTitle)
+            }
+
+             // Append parsed chapters to Title's chapters list atomically
+             val chaptersToInsert = parsed.chapters.map { pc ->
+                 Chapter(
+                     titleId = titleId,
+                     sourceFileId = sfId,
+                     title = pc.title,
+                     contentHtml = pc.contentHtml,
+                     orderIndex = 0, // Ignored by appendChaptersAtomically
+                     wordCount = pc.wordCount,
+                     characterCount = pc.characterCount,
+                     previewImagePath = pc.previewImagePath,
+                     originalFilePath = pc.originalFilePath,
+                     anchorStart = pc.anchorStart,
+                     anchorEnd = pc.anchorEnd,
+                     displayHtml = pc.displayHtml
+                 )
+             }
+             repository.appendChaptersAtomically(chaptersToInsert)
+        } catch (e: Exception) {
+            Log.e("BookViewModel", "Failed importing epub", e)
         }
     }
 
-    fun convertAndImportFile(context: Context, titleId: Long, uri: Uri, fileName: String, fileSize: Long) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                Log.d("BOOK_DEBUG", "convertAndImportFile: Starting conversion/import of $fileName (size: $fileSize) for titleId: $titleId")
-                val ext = fileName.substringAfterLast(".", "").lowercase()
-                val tempEpubFile = File(context.cacheDir, "${java.util.UUID.randomUUID()}_converted.epub")
-                
-                val inputStream = context.contentResolver.openInputStream(uri) ?: return@launch
-                var success = false
-                
-                if (ext == "fb2") {
-                    success = BookConverter.convertFb2ToEpub(context, inputStream, tempEpubFile)
-                }
-                inputStream.close()
-
-                if (success && tempEpubFile.exists()) {
-                    val convertedName = fileName.replace(Regex("\\.fb2$", RegexOption.IGNORE_CASE), "") + " (Converted).epub"
-                    val fileLength = tempEpubFile.length()
-                    val convertedUri = Uri.fromFile(tempEpubFile)
-                    
-                    val parsed = EpubProcessor.parseEpub(context, convertedUri, titleId)
-                    if (parsed != null) {
-                        Log.d("BOOK_DEBUG", "convertAndImportFile: Converted and parsed successfully. Title: ${parsed.title}, Chapters: ${parsed.chapters.size}")
-                        val nextFileIndex = repository.getSourceFilesForTitleOneShot(titleId).size
-                        val sfId = repository.insertSourceFile(
-                            SourceFile(
-                                titleId = titleId,
-                                fileName = convertedName,
-                                fileSize = fileLength,
-                                orderIndex = nextFileIndex,
-                                uploadedAt = System.currentTimeMillis()
-                            )
-                        )
-
-                        val currentTitle = repository.getTitleByIdOneShot(titleId)
-                        if (currentTitle != null) {
-                            val updatedTitle = currentTitle.copy(
-                                coverImage = if (currentTitle.coverImage.isNullOrEmpty()) parsed.coverImagePath else currentTitle.coverImage,
-                                originalEpubDirPath = parsed.originalEpubDirPath,
-                                originalOpfRelativePath = parsed.originalOpfRelativePath
-                            )
-                            repository.updateTitle(updatedTitle)
-                        }
- 
-                        val nextChapterIndex = repository.getChaptersForTitleOneShot(titleId).size
-                        parsed.chapters.forEachIndexed { i, pc ->
-                            Log.d("BOOK_DEBUG", "convertAndImportFile: Inserting chapter #$i [${pc.title}] to DB")
-                            repository.insertChapter(
-                                Chapter(
-                                    titleId = titleId,
-                                    sourceFileId = sfId,
-                                    title = pc.title,
-                                    contentHtml = pc.contentHtml,
-                                    orderIndex = nextChapterIndex + i,
-                                    wordCount = pc.wordCount,
-                                    characterCount = pc.characterCount,
-                                    previewImagePath = pc.previewImagePath,
-                                    originalFilePath = pc.originalFilePath,
-                                    anchorStart = pc.anchorStart,
-                                    anchorEnd = pc.anchorEnd,
-                                    displayHtml = pc.displayHtml
-                                )
-                            )
-                        }
-                    }
-                    try { tempEpubFile.delete() } catch (ignored: Exception) {}
-                } else {
-                    Log.e("BookViewModel", "Failed converting file $fileName to EPUB")
-                }
-            } catch (e: Exception) {
-                Log.e("BookViewModel", "Failed convert and import file process", e)
+    suspend fun convertAndImportFile(context: Context, titleId: Long, uri: Uri, fileName: String, fileSize: Long) = withContext(Dispatchers.IO) {
+        try {
+            Log.d("BOOK_DEBUG", "convertAndImportFile: Starting conversion/import of $fileName (size: $fileSize) for titleId: $titleId")
+            val ext = fileName.substringAfterLast(".", "").lowercase()
+            val tempEpubFile = File(context.cacheDir, "${java.util.UUID.randomUUID()}_converted.epub")
+            
+            val inputStream = context.contentResolver.openInputStream(uri) ?: return@withContext
+            var success = false
+            
+            if (ext == "fb2") {
+                success = BookConverter.convertFb2ToEpub(context, inputStream, tempEpubFile)
             }
+            inputStream.close()
+
+            if (success && tempEpubFile.exists()) {
+                val convertedName = fileName.replace(Regex("\\.fb2$", RegexOption.IGNORE_CASE), "") + " (Converted).epub"
+                val fileLength = tempEpubFile.length()
+                val convertedUri = Uri.fromFile(tempEpubFile)
+                
+                val parsed = EpubProcessor.parseEpub(context, convertedUri, titleId)
+                if (parsed != null) {
+                    Log.d("BOOK_DEBUG", "convertAndImportFile: Converted and parsed successfully. Title: ${parsed.title}, Chapters: ${parsed.chapters.size}")
+                    val sfId = repository.appendSourceFileAtomically(
+                        SourceFile(
+                            titleId = titleId,
+                            fileName = convertedName,
+                            fileSize = fileLength,
+                            orderIndex = 0,
+                            uploadedAt = System.currentTimeMillis()
+                        )
+                    )
+
+                    val currentTitle = repository.getTitleByIdOneShot(titleId)
+                    if (currentTitle != null) {
+                        val updatedTitle = currentTitle.copy(
+                            coverImage = if (currentTitle.coverImage.isNullOrEmpty()) parsed.coverImagePath else currentTitle.coverImage,
+                            originalEpubDirPath = parsed.originalEpubDirPath,
+                            originalOpfRelativePath = parsed.originalOpfRelativePath
+                        )
+                        repository.updateTitle(updatedTitle)
+                    }
+
+                    val chaptersToInsert = parsed.chapters.map { pc ->
+                        Chapter(
+                            titleId = titleId,
+                            sourceFileId = sfId,
+                            title = pc.title,
+                            contentHtml = pc.contentHtml,
+                            orderIndex = 0,
+                            wordCount = pc.wordCount,
+                            characterCount = pc.characterCount,
+                            previewImagePath = pc.previewImagePath,
+                            originalFilePath = pc.originalFilePath,
+                            anchorStart = pc.anchorStart,
+                            anchorEnd = pc.anchorEnd,
+                            displayHtml = pc.displayHtml
+                        )
+                    }
+                    repository.appendChaptersAtomically(chaptersToInsert)
+                }
+                try { tempEpubFile.delete() } catch (ignored: Exception) {}
+            } else {
+                Log.e("BookViewModel", "Failed converting file $fileName to EPUB")
+            }
+        } catch (e: Exception) {
+            Log.e("BookViewModel", "Failed convert and import file process", e)
         }
     }
 

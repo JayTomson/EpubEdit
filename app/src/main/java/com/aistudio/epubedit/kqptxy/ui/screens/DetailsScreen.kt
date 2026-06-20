@@ -59,6 +59,7 @@ import com.aistudio.epubedit.kqptxy.data.SourceFile
 import com.aistudio.epubedit.kqptxy.data.Title
 import com.aistudio.epubedit.kqptxy.util.*
 import com.aistudio.epubedit.kqptxy.viewmodel.BookViewModel
+import kotlinx.coroutines.launch
 import java.io.File
 import java.text.DecimalFormat
 
@@ -241,26 +242,30 @@ fun FilesTabContent(
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameInputText by remember { mutableStateOf("") }
     var showImportHubDialog by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
 
     // Unified launcher
     val unifiedLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetMultipleContents()
     ) { uris ->
-        uris.forEach { uri ->
-            val fileName = getFileNameFromUri(context, uri) ?: "imported_file"
-            val fileSize = getFileSizeFromUri(context, uri)
-            val ext = fileName.substringAfterLast(".", "").lowercase()
-            when (ext) {
-                "epub" -> {
-                    viewModel.importEpub(context, titleId, uri, fileName, fileSize)
-                    Toast.makeText(context, "Импорт EPUB тома запущен...", Toast.LENGTH_SHORT).show()
-                }
-                "fb2" -> {
-                    Toast.makeText(context, "Конвертация книги $fileName запущена...", Toast.LENGTH_LONG).show()
-                    viewModel.convertAndImportFile(context, titleId, uri, fileName, fileSize)
-                }
-                else -> {
-                    Toast.makeText(context, "Конвертер: Формат .$ext не поддерживается. Выберите EPUB или FB2.", Toast.LENGTH_LONG).show()
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        coroutineScope.launch {
+            uris.forEach { uri ->
+                val fileName = getFileNameFromUri(context, uri) ?: "imported_file"
+                val fileSize = getFileSizeFromUri(context, uri)
+                val ext = fileName.substringAfterLast(".", "").lowercase()
+                when (ext) {
+                    "epub" -> {
+                        Toast.makeText(context, "Импорт EPUB тома запущен...", Toast.LENGTH_SHORT).show()
+                        viewModel.importEpub(context, titleId, uri, fileName, fileSize)
+                    }
+                    "fb2" -> {
+                        Toast.makeText(context, "Конвертация книги $fileName запущена...", Toast.LENGTH_LONG).show()
+                        viewModel.convertAndImportFile(context, titleId, uri, fileName, fileSize)
+                    }
+                    else -> {
+                        Toast.makeText(context, "Конвертер: Формат .$ext не поддерживается.", Toast.LENGTH_LONG).show()
+                    }
                 }
             }
         }
@@ -270,24 +275,28 @@ fun FilesTabContent(
     val epubLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetMultipleContents()
     ) { uris ->
-        uris.forEach { uri ->
-            val fileName = getFileNameFromUri(context, uri) ?: "book.epub"
-            val fileSize = getFileSizeFromUri(context, uri)
-            viewModel.importEpub(context, titleId, uri, fileName, fileSize)
-        }
         if (uris.isNotEmpty()) {
-            Toast.makeText(context, "Импорт ${uris.size} EPUB томов запущен...", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Импорт ${uris.size} файлов запущен...", Toast.LENGTH_SHORT).show()
+        }
+        coroutineScope.launch {
+            uris.forEach { uri ->
+                val fileName = getFileNameFromUri(context, uri) ?: "book.epub"
+                val fileSize = getFileSizeFromUri(context, uri)
+                viewModel.importEpub(context, titleId, uri, fileName, fileSize)
+            }
         }
     }
 
     val fb2Launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetMultipleContents()
     ) { uris ->
-        uris.forEach { uri ->
-            val fileName = getFileNameFromUri(context, uri) ?: "book.fb2"
-            val fileSize = getFileSizeFromUri(context, uri)
-            Toast.makeText(context, "Конвертация FB2 $fileName в EPUB...", Toast.LENGTH_SHORT).show()
-            viewModel.convertAndImportFile(context, titleId, uri, fileName, fileSize)
+        coroutineScope.launch {
+            uris.forEach { uri ->
+                val fileName = getFileNameFromUri(context, uri) ?: "book.fb2"
+                val fileSize = getFileSizeFromUri(context, uri)
+                Toast.makeText(context, "Конвертация FB2 $fileName в EPUB...", Toast.LENGTH_SHORT).show()
+                viewModel.convertAndImportFile(context, titleId, uri, fileName, fileSize)
+            }
         }
     }
 

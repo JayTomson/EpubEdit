@@ -42,4 +42,10 @@ class BookRepository(private val bookDao: BookDao) {
     suspend fun updateChaptersOrder(chapters: List<Chapter>) = bookDao.updateChaptersOrder(chapters)
     suspend fun updateSourceFilesOrder(files: List<SourceFile>) =
         bookDao.updateSourceFilesOrder(files)
+        
+    suspend fun appendSourceFileAtomically(sourceFile: SourceFile): Long =
+        bookDao.appendSourceFileAtomically(sourceFile)
+        
+    suspend fun appendChaptersAtomically(chapters: List<Chapter>) =
+        bookDao.appendChaptersAtomically(chapters)
 }
