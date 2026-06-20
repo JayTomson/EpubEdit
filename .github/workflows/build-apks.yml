@@ -1,4 +1,4 @@
-name: Build Android APKs (Debug & Release)
+name: Build Android Release APK
 
 on:
   push:
@@ -28,40 +28,31 @@ jobs:
         cache-disabled: true
         validate-wrappers: false
 
-    - name: Decode or Generate Debug Keystore
-      run: |
-        if [ -f debug.keystore.base64 ]; then
-          base64 -d debug.keystore.base64 > debug.keystore
-        else
-          keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
-        fi
-
     - name: Set up Keystore for Release Build
       run: |
         if [ -n "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" ]; then
           echo "Decoding release keystore from GitHub Secrets..."
-          echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > my-upload-key.jks
+          echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > ${{ github.workspace }}/my-upload-key.jks
           echo "STORE_PASSWORD=${{ secrets.STORE_PASSWORD }}" >> $GITHUB_ENV
           echo "KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}" >> $GITHUB_ENV
-          echo "KEYSTORE_PATH=my-upload-key.jks" >> $GITHUB_ENV
+          echo "KEYSTORE_PATH=${{ github.workspace }}/my-upload-key.jks" >> $GITHUB_ENV
         else
           echo "No release keystore secret found. Generating a temporary signing key for release compilation..."
-          keytool -genkey -v -keystore my-upload-key.jks -storepass my_secure_password_123 -alias upload -keypass my_secure_password_123 -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Release,O=Android,C=US"
+          keytool -genkey -v -keystore ${{ github.workspace }}/my-upload-key.jks -storepass my_secure_password_123 -alias upload -keypass my_secure_password_123 -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Release,O=Android,C=US"
           echo "STORE_PASSWORD=my_secure_password_123" >> $GITHUB_ENV
           echo "KEY_PASSWORD=my_secure_password_123" >> $GITHUB_ENV
-          echo "KEYSTORE_PATH=my-upload-key.jks" >> $GITHUB_ENV
+          echo "KEYSTORE_PATH=${{ github.workspace }}/my-upload-key.jks" >> $GITHUB_ENV
         fi
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew || true
 
-    - name: Build Debug & Release APKs
-      run: ./gradlew assembleDebug assembleRelease || gradle assembleDebug assembleRelease
+    - name: Build Release APK
+      run: ./gradlew assembleRelease || gradle assembleRelease
 
-    - name: Upload APKs
+    - name: Upload Release APK
       uses: actions/upload-artifact@v4
       with:
-        name: android-apks
-        path: |
-          app/build/outputs/apk/debug/app-debug.apk
-          app/build/outputs/apk/release/app-release.apk
+        name: app-release
+        path: app/build/outputs/apk/release/app-release.apk
+
