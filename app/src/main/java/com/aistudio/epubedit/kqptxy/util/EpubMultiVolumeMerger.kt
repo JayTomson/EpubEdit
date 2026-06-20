@@ -3,7 +3,7 @@ package com.aistudio.epubedit.kqptxy.util
 import java.io.File
 
 object EpubMultiVolumeMerger {
-    fun mergeOpfManifests(sourceDirs: List<File>, title: String?, author: String?, description: String?): String {
+    fun mergeOpfManifests(sourceDirs: List<File>, title: String?, author: String?, description: String?, generateToc: Boolean = true): String {
         val allManifestItems = mutableListOf<String>()
         val allSpineItems = mutableListOf<String>()
         var firstMetadata = ""
@@ -115,9 +115,11 @@ object EpubMultiVolumeMerger {
         allManifestItems.removeAll { it.contains("properties=\"nav\"", ignoreCase = true) || it.contains("properties='nav'", ignoreCase = true) }
         allManifestItems.removeAll { it.contains("media-type=\"application/x-dtbncx+xml\"", ignoreCase = true) || it.contains("media-type='application/x-dtbncx+xml'", ignoreCase = true) }
 
-        // Add the global merged navigation items
-        allManifestItems.add("""<item id="merged_nav" href="merged_nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>""")
-        allManifestItems.add("""<item id="merged_ncx" href="merged_toc.ncx" media-type="application/x-dtbncx+xml"/>""")
+        if (generateToc) {
+            // Add the global merged navigation items
+            allManifestItems.add("""<item id="merged_nav" href="merged_nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>""")
+            allManifestItems.add("""<item id="merged_ncx" href="merged_toc.ncx" media-type="application/x-dtbncx+xml"/>""")
+        }
 
         return """<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="BookId">
@@ -125,8 +127,7 @@ $firstMetadata
 <manifest>
 ${allManifestItems.joinToString("\n")}
 </manifest>
-<spine toc="merged_ncx">
-<itemref idref="merged_nav" />
+${if (generateToc) "<spine toc=\"merged_ncx\">\n<itemref idref=\"merged_nav\" />" else "<spine>"}
 ${allSpineItems.joinToString("\n")}
 </spine>
 </package>"""
