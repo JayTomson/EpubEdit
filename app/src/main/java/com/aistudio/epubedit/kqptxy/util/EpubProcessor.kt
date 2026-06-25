@@ -544,10 +544,20 @@ object EpubProcessor {
             // NCX splitting strategy (highly accurate for splitting single giant HTML files)
             val fileIndexCursor = mutableMapOf<String, Int>()
 
+            fun normalizeHref(rawHref: String, baseDir: File): String {
+                return try {
+                    val decoded = java.net.URLDecoder.decode(rawHref, "UTF-8")
+                    File(baseDir, decoded).canonicalPath
+                } catch (e: Exception) {
+                    rawHref
+                }
+            }
+
             ncxNavPoints.forEachIndexed { idx, item ->
                 try {
                     val decodedFileHref = java.net.URLDecoder.decode(item.fileHref, "UTF-8")
                     val chapterFile = File(opfDir, decodedFileHref)
+                    val normalizedHref = try { chapterFile.canonicalPath } catch (e: Exception) { decodedFileHref }
                     if (chapterFile.exists()) {
                         val fullHtml = chapterFile.readText(Charsets.UTF_8)
 
@@ -565,7 +575,8 @@ object EpubProcessor {
 
                         for (nextIdx in (idx + 1) until ncxNavPoints.size) {
                             val nextItem = ncxNavPoints[nextIdx]
-                            if (nextItem.fileHref == item.fileHref && nextItem.anchor != null) {
+                            val nextNormalized = normalizeHref(nextItem.fileHref, opfDir)
+                            if (nextNormalized == normalizedHref && nextItem.anchor != null) {
                                 val pos = findAnchorPositionInHtml(fullHtml, nextItem.anchor)
                                 if (pos != -1 && pos > finalStartIdx) {
                                     endIdx = pos
@@ -585,7 +596,7 @@ object EpubProcessor {
                         val isFirstFromFile = chaptersList.none { it.originalFilePath == relPath }
                         
                         // Check if this file is split into multiple navPoints
-                        val isSplitFile = ncxNavPoints.count { it.fileHref == item.fileHref } > 1
+                        val isSplitFile = ncxNavPoints.count { normalizeHref(it.fileHref, opfDir) == normalizedHref } > 1
 
                         val storedHtml = if (keepOriginal && isFirstFromFile && !isSplitFile) {
                             fullHtml
@@ -1613,8 +1624,169 @@ object EpubProcessor {
             zos.write(mimeBytes)
             zos.closeEntry()
 
-            // Single volume (exact logic from bug instructions for Single)
-            val sourceDir = dirsToProcess.first()
+            if (dirsToProcess.size > 1) {
+                // Multi-volume merge
+                val chaptersBySource = chapters.groupBy { it.sourceFileId }
+
+                dirsToProcess.forEachIndexed { volumeIndex, sourceDir ->
+                    val sourceFileId = sourceDir.name.removePrefix("source_").toLongOrNull()
+                    val volumePrefix = "volume_${volumeIndex + 1}"
+                    val volumeChapters = if (sourceFileId != null) {
+                        chaptersBySource[sourceFileId] ?: emptyList()
+                    } else {
+                        existingChapters
+                    }
+
+                    var opfRelPath = "OEBPS/content.opf"
+                    val container = File(sourceDir, "META-INF/container.xml")
+                    if (container.exists()) {
+                        val m = Regex("""full-path\s*=\s*["']([^"']+)["']""").find(container.readText())
+                        if (m != null) opfRelPath = m.groupValues[1]
+                    }
+                    val opfFile = File(sourceDir, opfRelPath)
+                    val opfTextRaw = if (opfFile.exists()) opfFile.readText() else ""
+
+                    fun walk(dir: File, relBase: String) {
+                        dir.listFiles()?.forEach { f ->
+                            val relPathRaw = f.relativeTo(sourceDir).path.replace('\\', '/')
+                            val relPath = "$volumePrefix/$relPathRaw"
+                            if (f.isDirectory) {
+                                walk(f, relPath)
+                            } else {
+                                if (f.name == "mimetype") return@forEach
+
+                                zos.putNextEntry(ZipEntry(relPath))
+
+                                if (coverImagePath != null && isCoverFile(relPathRaw, opfTextRaw)) {
+                                    val coverFile = File(coverImagePath)
+                                    if (coverFile.exists()) {
+                                        coverFile.inputStream().use { it.copyTo(zos) }
+                                    } else {
+                                        f.inputStream().use { it.copyTo(zos) }
+                                    }
+                                } else {
+                                    val chaptersForThisFile = volumeChapters.filter {
+                                        it.originalFilePath == relPathRaw
+                                    }
+                                    if (chaptersForThisFile.isEmpty()) {
+                                        f.inputStream().use { it.copyTo(zos) }
+                                    } else if (chaptersForThisFile.size == 1 && chaptersForThisFile.first().anchorStart == null) {
+                                        val override = chaptersForThisFile.first()
+                                        zos.write((override.displayHtml ?: override.contentHtml).toByteArray(Charsets.UTF_8))
+                                    } else {
+                                        val rebuiltContent = rebuildSplitFileContent(f, chaptersForThisFile)
+                                        zos.write(rebuiltContent.toByteArray(Charsets.UTF_8))
+                                    }
+                                }
+                                zos.closeEntry()
+                            }
+                        }
+                    }
+                    walk(sourceDir, "")
+                }
+
+                // Генерация merged TOC (NCX) и NAV (EPUB3)
+                val navList = StringBuilder()
+                val ncxNavMap = StringBuilder()
+                var chapterIndex = 1
+
+                existingChapters.forEach { chap ->
+                    val srcFileId = chap.sourceFileId
+                    val srcDir = dirsToProcess.find { it.name.removePrefix("source_").toLongOrNull() == srcFileId }
+                    if (srcDir != null) {
+                        val volumeIndex = dirsToProcess.indexOf(srcDir)
+                        if (volumeIndex >= 0) {
+                            val volumePrefix = "volume_${volumeIndex + 1}"
+                            var safeChapTitle = escapeXml(stripHtmlTags(chap.title ?: "")).trim()
+                            if (safeChapTitle.isEmpty()) safeChapTitle = "Chapter $chapterIndex"
+
+                            val opfFolderRegex = Regex("""full-path\s*=\s*["']([^"']+)["']""")
+                                .find(File(srcDir, "META-INF/container.xml").takeIf { it.exists() }?.readText() ?: "")
+                            val opfRelPath = opfFolderRegex?.groupValues?.get(1) ?: "OEBPS/content.opf"
+                            val opfDir = if (opfRelPath.contains("/")) opfRelPath.substringBeforeLast("/") + "/" else ""
+
+                            val relPathRaw = chap.originalFilePath ?: return@forEach
+                            val fileHrefZip = "$volumePrefix/$relPathRaw"
+                            val finalHref = if (chap.anchorStart != null) "$fileHrefZip#${chap.anchorStart}" else fileHrefZip
+
+                            navList.append("<li><a href=\"$finalHref\">$safeChapTitle</a></li>\n")
+                            ncxNavMap.append("""
+                                <navPoint id="chap_$chapterIndex" playOrder="$chapterIndex">
+                                    <navLabel><text>$safeChapTitle</text></navLabel>
+                                    <content src="$finalHref"/>
+                                </navPoint>
+                            """.trimIndent() + "\n")
+                            chapterIndex++
+                        }
+                    }
+                }
+
+                if (navList.isEmpty()) {
+                    navList.append("<li><a href=\"\">Content</a></li>")
+                    ncxNavMap.append("""<navPoint id="chap_1" playOrder="1"><navLabel><text>Content</text></navLabel><content src=""/></navPoint>""")
+                }
+
+                // merged_toc.ncx
+                val ncxContent = """<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+    <head>
+        <meta name="dtb:uid" content="${java.util.UUID.randomUUID()}"/>
+        <meta name="dtb:depth" content="1"/>
+        <meta name="dtb:totalPageCount" content="0"/>
+        <meta name="dtb:maxPageNumber" content="0"/>
+    </head>
+    <docTitle><text>${escapeXml(bookTitle)}</text></docTitle>
+    <docAuthor><text>${escapeXml(bookAuthor)}</text></docAuthor>
+    <navMap>
+        $ncxNavMap
+    </navMap>
+</ncx>""".trimIndent()
+                zos.putNextEntry(ZipEntry("merged_toc.ncx"))
+                zos.write(ncxContent.toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
+
+                // merged_nav.xhtml
+                val navXhtmlContent = """<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head>
+    <title>Navigation</title>
+    <meta charset="utf-8" />
+</head>
+<body>
+    <nav epub:type="toc" id="toc">
+        <h1>${escapeXml(bookTitle)}</h1>
+        <ol>
+            $navList
+        </ol>
+    </nav>
+</body>
+</html>""".trimIndent()
+                zos.putNextEntry(ZipEntry("merged_nav.xhtml"))
+                zos.write(navXhtmlContent.toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
+
+                // merged_content.opf
+                val mergedOpf = EpubMultiVolumeMerger.mergeOpfManifests(
+                    dirsToProcess, bookTitle, bookAuthor, bookDescription, generateToc
+                )
+                zos.putNextEntry(ZipEntry("merged_content.opf"))
+                zos.write(mergedOpf.toByteArray())
+                zos.closeEntry()
+
+                // META-INF/container.xml указывает на merged_content.opf
+                zos.putNextEntry(ZipEntry("META-INF/container.xml"))
+                zos.write("""<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+    <rootfiles>
+        <rootfile full-path="merged_content.opf" media-type="application/oebps-package+xml"/>
+    </rootfiles>
+</container>""".toByteArray())
+                zos.closeEntry()
+
+            } else {
+                // Single volume (exact logic from bug instructions for Single)
+                val sourceDir = dirsToProcess.first()
                 
                 // Identify OPF path
                 var opfRelPath = "OEBPS/content.opf"
@@ -1750,6 +1922,7 @@ object EpubProcessor {
                     }
                 }
                 walk(sourceDir)
+            }
 
             // New handwritten chapters
             newChapters.forEachIndexed { index, chapter ->
