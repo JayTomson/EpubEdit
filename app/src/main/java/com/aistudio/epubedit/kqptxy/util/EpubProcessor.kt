@@ -171,18 +171,15 @@ object EpubProcessor {
                 }
             }
 
-            val imageMap = mutableMapOf<String, String>() // filename -> persistent absolute path
+            val imageMap = mutableMapOf<String, String>() // filename -> absolute path
             imageFiles.forEach { file ->
-                val relativePath = file.relativeTo(tempDir).path.lowercase().replace('\\', '/')
-                val destFile = if (titleId != null) {
-                    File(bookMediaDir, relativePath)
-                } else {
-                    File(bookMediaDir, "media_${System.currentTimeMillis()}_${file.name}")
-                }
+                val destName = if (titleId != null) file.name else "media_${System.currentTimeMillis()}_${file.name}"
+                val destFile = File(bookMediaDir, destName)
                 try {
-                    destFile.parentFile?.mkdirs()
                     file.copyTo(destFile, overwrite = true)
                     imageMap[file.name.lowercase()] = destFile.absolutePath
+                    // Also store complete key using relative path in lower case
+                    val relativePath = file.relativeTo(tempDir).path.lowercase().replace('\\', '/')
                     imageMap[relativePath] = destFile.absolutePath
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to copy image ${file.name}", e)
@@ -1604,26 +1601,7 @@ object EpubProcessor {
         val sanitizedFileName = if (fileName.endsWith(".epub", ignoreCase = true)) fileName else "$fileName.epub"
         val tempOutputFile = File(context.cacheDir, "temp_export_${System.currentTimeMillis()}_$sanitizedFileName")
 
-        if (dirsToProcess.size > 1) {
-            try {
-                EpubMultiVolumeMerger.mergeEpubVolumes(
-                    context = context,
-                    dirsToProcess = dirsToProcess,
-                    chapters = chapters,
-                    bookTitle = bookTitle,
-                    bookAuthor = bookAuthor,
-                    bookDescription = bookDescription,
-                    coverImagePath = coverImagePath,
-                    generateToc = generateToc,
-                    tempOutputFile = tempOutputFile
-                )
-            } catch (e: Exception) {
-                Log.e(TAG, "Multi-volume merge failed", e)
-                return null
-            }
-            return saveFileToPublicDownloads(context, tempOutputFile, sanitizedFileName)
-        } else {
-            ZipOutputStream(BufferedOutputStream(FileOutputStream(tempOutputFile))).use { zos ->
+        ZipOutputStream(BufferedOutputStream(FileOutputStream(tempOutputFile))).use { zos ->
             val mimeEntry = ZipEntry("mimetype")
             mimeEntry.method = ZipEntry.STORED
             val mimeBytes = "application/epub+zip".toByteArray(Charsets.US_ASCII)
@@ -1635,178 +1613,8 @@ object EpubProcessor {
             zos.write(mimeBytes)
             zos.closeEntry()
 
-            if (dirsToProcess.size > 1) {
-                // Multi-volume merge
-                val chaptersBySource = chapters.groupBy { it.sourceFileId }
-                
-                // Write merged OPF
-                // (Omitted in zip structure currently because we have to overwrite it?)
-                // Actually the prompt says "Для каждого source-файла копируем его структуру в отдельную подпапку"
-                // This means volume_1/ and volume_2/...
-                
-                dirsToProcess.forEachIndexed { volumeIndex, sourceDir ->
-                    val sourceFileId = sourceDir.name.removePrefix("source_").toLongOrNull()
-                    val volumePrefix = "volume_${volumeIndex + 1}"
-                    val volumeChapters = if (sourceFileId != null) { chaptersBySource[sourceFileId] ?: emptyList() } else { existingChapters }
-
-                    // Identify OPF path for this volume to get opfText for cover parsing
-                    var opfRelPath = "OEBPS/content.opf"
-                    val container = File(sourceDir, "META-INF/container.xml")
-                    if (container.exists()) {
-                        val m = Regex("""full-path\s*=\s*["']([^"']+)["']""").find(container.readText())
-                        if (m != null) opfRelPath = m.groupValues[1]
-                    }
-                    val opfFile = File(sourceDir, opfRelPath)
-                    val opfTextRaw = if (opfFile.exists()) opfFile.readText() else ""
-
-                    fun walk(dir: File, relBase: String) {
-                        dir.listFiles()?.forEach { f ->
-                            val relPathRaw = f.relativeTo(sourceDir).path.replace('\\', '/')
-                            val relPath = "$volumePrefix/$relPathRaw"
-                            if (f.isDirectory) {
-                                walk(f, relPath)
-                            } else {
-                                if (f.name == "mimetype") return@forEach
-
-                                zos.putNextEntry(ZipEntry(relPath))
-                                
-                                if (coverImagePath != null && isCoverFile(relPathRaw, opfTextRaw)) {
-                                    val coverFile = File(coverImagePath)
-                                    if (coverFile.exists()) {
-                                        coverFile.inputStream().use { it.copyTo(zos) }
-                                    } else {
-                                        f.inputStream().use { it.copyTo(zos) }
-                                    }
-                                } else {
-                                    val chaptersForThisFile = volumeChapters.filter {
-                                        it.originalFilePath == relPathRaw
-                                    }
-                                    if (chaptersForThisFile.isEmpty()) {
-                                        f.inputStream().use { it.copyTo(zos) }
-                                    } else if (chaptersForThisFile.size == 1 && chaptersForThisFile.first().anchorStart == null) {
-                                        val override = chaptersForThisFile.first()
-                                        zos.write((override.displayHtml ?: override.contentHtml).toByteArray(Charsets.UTF_8))
-                                    } else {
-                                        val rebuiltContent = rebuildSplitFileContent(f, chaptersForThisFile)
-                                        zos.write(rebuiltContent.toByteArray(Charsets.UTF_8))
-                                    }
-                                }
-                                zos.closeEntry()
-                            }
-                        }
-                    }
-                    walk(sourceDir, "")
-                }
-                
-                // --- Generate merged TOC (NCX) and NAV (EPUB3) ---
-                if (true) {
-                    val navList = StringBuilder()
-                    val ncxNavMap = StringBuilder()
-                    var chapterIndex = 1
-                    
-                    existingChapters.forEach { chap ->
-                         val sourceFileId = chap.sourceFileId
-                         val sourceDir = dirsToProcess.find { it.name.removePrefix("source_").toLongOrNull() == sourceFileId }
-                         if (sourceDir != null) {
-                             val volumeIndex = dirsToProcess.indexOf(sourceDir)
-                             if (volumeIndex >= 0) {
-                                 val volumePrefix = "volume_${volumeIndex + 1}"
-                                 var safeChapTitle = escapeXml(stripHtmlTags(chap.title ?: "")).trim()
-                                 if (safeChapTitle.isEmpty()) safeChapTitle = "Chapter $chapterIndex"
-                                 
-                                 val opfFolderRegex = Regex("""full-path\s*=\s*["']([^"']+)["']""").find(File(sourceDir, "META-INF/container.xml").takeIf { it.exists() }?.readText() ?: "")
-                                 val opfRelPath = opfFolderRegex?.groupValues?.get(1) ?: "OEBPS/content.opf"
-                                 val opfDir = if (opfRelPath.contains("/")) opfRelPath.substringBeforeLast("/") + "/" else ""
-                                 
-                                 // The chapter originalFilePath is exactly what walk() sees (relPathRaw) if it is relative to sourceDir.
-                                 // But wait, the anchor start isn't part of the file path.
-                                 val relPathRaw = chap.originalFilePath ?: return@forEach
-                                 val fileHrefZip = "$volumePrefix/$relPathRaw"
-                                 val finalHref = if (chap.anchorStart != null) "$fileHrefZip#${chap.anchorStart}" else fileHrefZip
-                                 
-                                 navList.append("<li><a href=\"$finalHref\">$safeChapTitle</a></li>\n")
-                                 ncxNavMap.append("""
-                                     <navPoint id="chap_$chapterIndex" playOrder="${chapterIndex}">
-                                         <navLabel>
-                                             <text>$safeChapTitle</text>
-                                         </navLabel>
-                                         <content src="$finalHref"/>
-                                     </navPoint>
-                                 """.trimIndent() + "\n")
-                                 
-                                 chapterIndex++
-                             }
-                         }
-                    }
-                    
-                    if (navList.isEmpty()) {
-                        navList.append("<li><a href=\"\">Content</a></li>")
-                        ncxNavMap.append("""<navPoint id="chap_1" playOrder="1"><navLabel><text>Content</text></navLabel><content src=""/></navPoint>""")
-                    }
-                    
-                    // Write merged_toc.ncx
-                    val ncxContent = """
-                        <?xml version="1.0" encoding="UTF-8"?>
-                        <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
-                            <head>
-                                <meta name="dtb:uid" content="${java.util.UUID.randomUUID()}"/>
-                                <meta name="dtb:depth" content="1"/>
-                                <meta name="dtb:totalPageCount" content="0"/>
-                                <meta name="dtb:maxPageNumber" content="0"/>
-                            </head>
-                            <docTitle><text>${escapeXml(bookTitle)}</text></docTitle>
-                            <docAuthor><text>${escapeXml(bookAuthor)}</text></docAuthor>
-                            <navMap>
-                                $ncxNavMap
-                            </navMap>
-                        </ncx>
-                    """.trimIndent().trim()
-                    zos.putNextEntry(ZipEntry("merged_toc.ncx"))
-                    zos.write(ncxContent.toByteArray(Charsets.UTF_8))
-                    zos.closeEntry()
-                    
-                    // Write merged_nav.xhtml
-                    val navXhtmlContent = """
-                        <?xml version="1.0" encoding="utf-8"?>
-                        <!DOCTYPE html>
-                        <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
-                        <head>
-                            <title>Navigation</title>
-                            <meta charset="utf-8" />
-                        </head>
-                        <body>
-                            <nav epub:type="toc" id="toc">
-                                <h1>${escapeXml(bookTitle)}</h1>
-                                <ol>
-                                    $navList
-                                </ol>
-                            </nav>
-                        </body>
-                        </html>
-                    """.trimIndent().trim()
-                    zos.putNextEntry(ZipEntry("merged_nav.xhtml"))
-                    zos.write(navXhtmlContent.toByteArray(Charsets.UTF_8))
-                    zos.closeEntry()
-                }
-                
-                // Then write the merged OPF
-                val mergedOpf = EpubMultiVolumeMerger.mergeOpfManifests(dirsToProcess, bookTitle, bookAuthor, bookDescription, generateToc)
-                zos.putNextEntry(ZipEntry("merged_content.opf"))
-                zos.write(mergedOpf.toByteArray())
-                zos.closeEntry()
-
-                zos.putNextEntry(ZipEntry("META-INF/container.xml"))
-                zos.write("""<?xml version="1.0"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-    <rootfiles>
-        <rootfile full-path="merged_content.opf" media-type="application/oebps-package+xml"/>
-    </rootfiles>
-</container>""".toByteArray())
-                zos.closeEntry()
-                
-            } else {
-                // Single volume (exact logic from bug instructions for Single)
-                val sourceDir = dirsToProcess.first()
+            // Single volume (exact logic from bug instructions for Single)
+            val sourceDir = dirsToProcess.first()
                 
                 // Identify OPF path
                 var opfRelPath = "OEBPS/content.opf"
@@ -1893,9 +1701,6 @@ object EpubProcessor {
 
                             if (f.name.endsWith(".opf", ignoreCase = true)) {
                                 val originalOpf = f.readText(Charsets.UTF_8)
-                                val patchedOpf = EpubMultiVolumeMerger.mergeOpfManifests(listOf(sourceDir), bookTitle, bookAuthor, bookDescription)
-                                // wait, mergeOpfManifests returns a completely assembled xml which works.
-                                // Actually, for single volume, it's safer to just regex replace the metadata.
                                 var result = originalOpf
                                 if (bookTitle.isNotBlank()) {
                                     val escaped = bookTitle.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -1945,7 +1750,6 @@ object EpubProcessor {
                     }
                 }
                 walk(sourceDir)
-            }
 
             // New handwritten chapters
             newChapters.forEachIndexed { index, chapter ->
@@ -1960,7 +1764,6 @@ object EpubProcessor {
                 zos.write(html.toByteArray(Charsets.UTF_8))
                 zos.closeEntry()
             }
-        }
         }
 
         return saveFileToPublicDownloads(context, tempOutputFile, sanitizedFileName)
@@ -2049,44 +1852,19 @@ object EpubProcessor {
         } catch (e: Exception) {
             src
         }
-        val cleanSrc = decodedSrc.replace('\\', '/').lowercase()
-        // Remove leading ../ or ./
-        var normalizedSrc = cleanSrc
-        while (normalizedSrc.startsWith("../")) {
-            normalizedSrc = normalizedSrc.substring(3)
-        }
-        while (normalizedSrc.startsWith("./")) {
-            normalizedSrc = normalizedSrc.substring(2)
-        }
-        
+        val filename = File(decodedSrc.lowercase()).name
         val mediaDir = File(context.filesDir, "epub_media")
         val searchDir = if (titleId != null) File(mediaDir, "book_$titleId") else mediaDir
         if (!searchDir.exists()) return null
 
-        // Try 1: Exact relative path
-        val relativeFile = File(searchDir, normalizedSrc)
-        if (relativeFile.exists()) {
-            return relativeFile.absolutePath
-        }
-
-        // Try 2: Plain filename
-        val filename = File(decodedSrc.lowercase()).name
         val localFile = File(searchDir, filename)
         if (localFile.exists()) return localFile.absolutePath
 
-        // Try 3: Search recursively for ending relative path
-        if (searchDir.exists()) {
-            val allFiles = searchDir.walkTopDown().filter { it.isFile }.toList()
-            val matchByRelPath = allFiles.find { it.absolutePath.replace('\\', '/').lowercase().endsWith(normalizedSrc) }
-            if (matchByRelPath != null) {
-                return matchByRelPath.absolutePath
-            }
-
-            // Try 4: Search recursively for ending filename
-            val matchByFilename = allFiles.find { it.name.lowercase() == filename }
-            if (matchByFilename != null) {
-                return matchByFilename.absolutePath
-            }
+        val matches = searchDir.listFiles { _, name ->
+            name.lowercase().endsWith(filename)
+        }
+        if (!matches.isNullOrEmpty()) {
+            return matches.first().absolutePath
         }
         return null
     }
