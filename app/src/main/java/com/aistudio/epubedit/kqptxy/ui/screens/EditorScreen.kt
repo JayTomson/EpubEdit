@@ -132,7 +132,7 @@ fun parseHtmlToEditorBlocks(
     }
     
     // Regex matches <div...><img.../></div> or standalone <img.../> tags
-    val regex = Regex("(<div(?:\\s+[^>]*)*>\\s*)?<img\\s+[^>]*src=\"([^\"]+)\"[^>]*>(\\s*</div>)?", RegexOption.IGNORE_CASE)
+    val regex = Regex("(<div(?:\\s+[^>]*)*>\\s*)?<img\\s+[^>]*src=[\\\"']([^\\\"']+)[\\\"'][^>]*>(\\s*</div>)?", RegexOption.IGNORE_CASE)
     
     var lastIdx = 0
     val matches = regex.findAll(html).toList()

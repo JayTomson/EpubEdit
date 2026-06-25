@@ -172,19 +172,22 @@ object EpubProcessor {
             }
 
             val imageMap = mutableMapOf<String, String>() // filename -> persistent absolute path
-        imageFiles.forEach { file ->
-            val destName = if (titleId != null) file.name else "media_${System.currentTimeMillis()}_${file.name}"
-            val destFile = File(bookMediaDir, destName)
-            try {
-                file.copyTo(destFile, overwrite = true)
-                imageMap[file.name.lowercase()] = destFile.absolutePath
-                // Also store complete key using relative path in lower case
+            imageFiles.forEach { file ->
                 val relativePath = file.relativeTo(tempDir).path.lowercase().replace('\\', '/')
-                imageMap[relativePath] = destFile.absolutePath
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to copy image ${file.name}", e)
+                val destFile = if (titleId != null) {
+                    File(bookMediaDir, relativePath)
+                } else {
+                    File(bookMediaDir, "media_${System.currentTimeMillis()}_${file.name}")
+                }
+                try {
+                    destFile.parentFile?.mkdirs()
+                    file.copyTo(destFile, overwrite = true)
+                    imageMap[file.name.lowercase()] = destFile.absolutePath
+                    imageMap[relativePath] = destFile.absolutePath
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to copy image ${file.name}", e)
+                }
             }
-        }
 
         // Find the OPF file path from container.xml
         val containerFile = File(tempDir, "META-INF/container.xml")
@@ -1601,7 +1604,26 @@ object EpubProcessor {
         val sanitizedFileName = if (fileName.endsWith(".epub", ignoreCase = true)) fileName else "$fileName.epub"
         val tempOutputFile = File(context.cacheDir, "temp_export_${System.currentTimeMillis()}_$sanitizedFileName")
 
-        ZipOutputStream(BufferedOutputStream(FileOutputStream(tempOutputFile))).use { zos ->
+        if (dirsToProcess.size > 1) {
+            try {
+                EpubMultiVolumeMerger.mergeEpubVolumes(
+                    context = context,
+                    dirsToProcess = dirsToProcess,
+                    chapters = chapters,
+                    bookTitle = bookTitle,
+                    bookAuthor = bookAuthor,
+                    bookDescription = bookDescription,
+                    coverImagePath = coverImagePath,
+                    generateToc = generateToc,
+                    tempOutputFile = tempOutputFile
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Multi-volume merge failed", e)
+                return null
+            }
+            return saveFileToPublicDownloads(context, tempOutputFile, sanitizedFileName)
+        } else {
+            ZipOutputStream(BufferedOutputStream(FileOutputStream(tempOutputFile))).use { zos ->
             val mimeEntry = ZipEntry("mimetype")
             mimeEntry.method = ZipEntry.STORED
             val mimeBytes = "application/epub+zip".toByteArray(Charsets.US_ASCII)
@@ -1939,6 +1961,7 @@ object EpubProcessor {
                 zos.closeEntry()
             }
         }
+        }
 
         return saveFileToPublicDownloads(context, tempOutputFile, sanitizedFileName)
     }
@@ -2026,19 +2049,44 @@ object EpubProcessor {
         } catch (e: Exception) {
             src
         }
-        val filename = File(decodedSrc.lowercase()).name
+        val cleanSrc = decodedSrc.replace('\\', '/').lowercase()
+        // Remove leading ../ or ./
+        var normalizedSrc = cleanSrc
+        while (normalizedSrc.startsWith("../")) {
+            normalizedSrc = normalizedSrc.substring(3)
+        }
+        while (normalizedSrc.startsWith("./")) {
+            normalizedSrc = normalizedSrc.substring(2)
+        }
+        
         val mediaDir = File(context.filesDir, "epub_media")
         val searchDir = if (titleId != null) File(mediaDir, "book_$titleId") else mediaDir
         if (!searchDir.exists()) return null
 
+        // Try 1: Exact relative path
+        val relativeFile = File(searchDir, normalizedSrc)
+        if (relativeFile.exists()) {
+            return relativeFile.absolutePath
+        }
+
+        // Try 2: Plain filename
+        val filename = File(decodedSrc.lowercase()).name
         val localFile = File(searchDir, filename)
         if (localFile.exists()) return localFile.absolutePath
 
-        val matches = searchDir.listFiles { _, name ->
-            name.lowercase().endsWith(filename)
-        }
-        if (!matches.isNullOrEmpty()) {
-            return matches.first().absolutePath
+        // Try 3: Search recursively for ending relative path
+        if (searchDir.exists()) {
+            val allFiles = searchDir.walkTopDown().filter { it.isFile }.toList()
+            val matchByRelPath = allFiles.find { it.absolutePath.replace('\\', '/').lowercase().endsWith(normalizedSrc) }
+            if (matchByRelPath != null) {
+                return matchByRelPath.absolutePath
+            }
+
+            // Try 4: Search recursively for ending filename
+            val matchByFilename = allFiles.find { it.name.lowercase() == filename }
+            if (matchByFilename != null) {
+                return matchByFilename.absolutePath
+            }
         }
         return null
     }
