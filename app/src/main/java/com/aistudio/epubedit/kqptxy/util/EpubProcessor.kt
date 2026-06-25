@@ -1070,6 +1070,19 @@ object EpubProcessor {
         cleaned = cleaned.replace(Regex("(?i)</?html[^>]*>"), "")
         cleaned = cleaned.replace(Regex("(?i)<head[^>]*>[\\s\\S]*?</head>"), "")
         
+        // Sanitize for valid XML compatibility (epubcheck compliant)
+        val entityRegex = Regex("&(?!(amp|lt|gt|quot|apos|#[0-9]+|#x[0-9a-fA-F]+);)")
+        cleaned = cleaned.replace(entityRegex, "&amp;")
+
+        val voidTags = listOf("br", "hr", "img", "image", "meta", "link")
+        for (tag in voidTags) {
+            val pattern = Regex("<$tag\\b([^>]*?)(?<!/)>", RegexOption.IGNORE_CASE)
+            cleaned = cleaned.replace(pattern) { match ->
+                val attrs = match.groupValues[1]
+                "<$tag$attrs />"
+            }
+        }
+
         return cleaned.trim()
     }
 
@@ -1585,6 +1598,57 @@ object EpubProcessor {
                 dir.name.removePrefix("source_").toLongOrNull() ?: 0L
             }) ?: emptyList()
 
+        val dirsToProcess = if (sourceDirs.isEmpty()) listOf(baseOriginalsDir) else sourceDirs
+
+        val sanitizedFileName = if (fileName.endsWith(".epub", ignoreCase = true)) fileName else "$fileName.epub"
+        val tempOutputFile = File(context.cacheDir, "temp_export_${System.currentTimeMillis()}_$sanitizedFileName")
+
+        val success = EpubMultiVolumeMerger.mergeVolumes(
+            context = context,
+            sourceDirs = dirsToProcess,
+            outputZipFile = tempOutputFile,
+            bookTitle = bookTitle,
+            bookAuthor = bookAuthor,
+            bookDescription = bookDescription,
+            coverImagePath = coverImagePath,
+            generateToc = generateToc
+        )
+
+        if (!success) {
+            Log.e(TAG, "mergeVolumes failed in exportFromOriginalArchive")
+            return null
+        }
+
+        return saveFileToPublicDownloads(context, tempOutputFile, sanitizedFileName)
+    }
+
+    private fun exportFromOriginalArchiveOldIgnored(
+        context: Context,
+        fileName: String,
+        titleId: Long,
+        chapters: List<ParsedChapter>,
+        bookTitle: String,
+        bookAuthor: String,
+        bookDescription: String,
+        coverImagePath: String?,
+        generateToc: Boolean
+    ): File? {
+        val baseOriginalsDir = File(context.filesDir, "epub_originals/book_$titleId")
+        if (!baseOriginalsDir.exists()) {
+            Log.d(TAG, "exportFromOriginalArchive: no originals for book_$titleId")
+            return null
+        }
+
+        val orderedSourceFileIds = chapters.mapNotNull { it.sourceFileId }.distinct()
+        val sourceDirs = baseOriginalsDir.listFiles { f -> f.isDirectory && f.name.startsWith("source_") }
+            ?.sortedWith(compareBy<File> { dir ->
+                val id = dir.name.removePrefix("source_").toLongOrNull()
+                val idx = orderedSourceFileIds.indexOf(id)
+                if (idx >= 0) idx else Int.MAX_VALUE
+            }.thenBy { dir ->
+                dir.name.removePrefix("source_").toLongOrNull() ?: 0L
+            }) ?: emptyList()
+
         // Fallback to old format logic if needed, but since we are replacing all logic...
         // Let's implement single volume using the new robust logic with just one volume iteration.
         val dirsToProcess = if (sourceDirs.isEmpty()) listOf(baseOriginalsDir) else sourceDirs
@@ -1768,9 +1832,9 @@ object EpubProcessor {
                 }
                 
                 // Then write the merged OPF
-                val mergedOpf = EpubMultiVolumeMerger.mergeOpfManifests(dirsToProcess, bookTitle, bookAuthor, bookDescription, generateToc)
+                // val mergedOpf = EpubMultiVolumeMerger.mergeOpfManifests(dirsToProcess, bookTitle, bookAuthor, bookDescription, generateToc)
                 zos.putNextEntry(ZipEntry("merged_content.opf"))
-                zos.write(mergedOpf.toByteArray())
+                zos.write("".toByteArray())
                 zos.closeEntry()
 
                 zos.putNextEntry(ZipEntry("META-INF/container.xml"))
@@ -1871,7 +1935,7 @@ object EpubProcessor {
 
                             if (f.name.endsWith(".opf", ignoreCase = true)) {
                                 val originalOpf = f.readText(Charsets.UTF_8)
-                                val patchedOpf = EpubMultiVolumeMerger.mergeOpfManifests(listOf(sourceDir), bookTitle, bookAuthor, bookDescription)
+                                // val patchedOpf = EpubMultiVolumeMerger.mergeOpfManifests(listOf(sourceDir), bookTitle, bookAuthor, bookDescription)
                                 // wait, mergeOpfManifests returns a completely assembled xml which works.
                                 // Actually, for single volume, it's safer to just regex replace the metadata.
                                 var result = originalOpf
